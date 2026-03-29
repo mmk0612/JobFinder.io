@@ -43,6 +43,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _resolve_timezone() -> str:
+    return (os.environ.get("NOTIFY_TIMEZONE") or "").strip() or DEFAULT_TIMEZONE
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="notify",
@@ -68,7 +72,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--timezone",
-        default=os.environ.get("NOTIFY_TIMEZONE", DEFAULT_TIMEZONE),
+        default=_resolve_timezone(),
         help="Digest timezone (default from NOTIFY_TIMEZONE or Asia/Kolkata).",
     )
     parser.add_argument(
