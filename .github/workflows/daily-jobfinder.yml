@@ -1,0 +1,127 @@
+name: Daily JobFinder Run
+
+on:
+  schedule:
+    # 19:00 IST = 13:30 UTC
+    - cron: "30 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run-daily-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Create virtual environment
+        run: python -m venv .venv
+
+      - name: Install dependencies
+        run: |
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements.txt
+
+      - name: Install Playwright Chromium
+        run: |
+          .venv/bin/python -m playwright install --with-deps chromium
+
+      - name: Validate required secrets
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NOTIFY_EMAIL_SMTP_HOST: ${{ secrets.NOTIFY_EMAIL_SMTP_HOST }}
+          NOTIFY_EMAIL_SMTP_PORT: ${{ secrets.NOTIFY_EMAIL_SMTP_PORT }}
+          NOTIFY_EMAIL_SMTP_SSL: ${{ secrets.NOTIFY_EMAIL_SMTP_SSL }}
+          NOTIFY_EMAIL_USE_TLS: ${{ secrets.NOTIFY_EMAIL_USE_TLS }}
+          NOTIFY_EMAIL_SMTP_USER: ${{ secrets.NOTIFY_EMAIL_SMTP_USER }}
+          NOTIFY_EMAIL_SMTP_PASSWORD: ${{ secrets.NOTIFY_EMAIL_SMTP_PASSWORD }}
+          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+        run: |
+          missing=0
+          for key in \
+            NVIDIA_API_KEY \
+            DATABASE_URL \
+            NOTIFY_EMAIL_SMTP_HOST \
+            NOTIFY_EMAIL_SMTP_PORT \
+            NOTIFY_EMAIL_SMTP_SSL \
+            NOTIFY_EMAIL_USE_TLS \
+            NOTIFY_EMAIL_SMTP_USER \
+            NOTIFY_EMAIL_SMTP_PASSWORD \
+            NOTIFY_EMAIL_FROM \
+            NOTIFY_EMAIL_TO; do
+            if [ -z "${!key}" ]; then
+              echo "Missing required secret: $key"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Run daily dry-run script
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          LLM_TOP_P: ${{ secrets.LLM_TOP_P }}
+          LLM_MAX_TOKENS: ${{ secrets.LLM_MAX_TOKENS }}
+          LLM_REQUEST_TIMEOUT_SECONDS: ${{ secrets.LLM_REQUEST_TIMEOUT_SECONDS }}
+          LLM_TOTAL_TIMEOUT_SECONDS: ${{ secrets.LLM_TOTAL_TIMEOUT_SECONDS }}
+          LLM_MIN_REQUEST_INTERVAL_SECONDS: ${{ secrets.LLM_MIN_REQUEST_INTERVAL_SECONDS }}
+          LLM_MAX_RETRIES: ${{ secrets.LLM_MAX_RETRIES }}
+
+          JOB_EMBEDDING_MODEL: ${{ secrets.JOB_EMBEDDING_MODEL }}
+          JOB_PROCESSING_CONCURRENCY: ${{ secrets.JOB_PROCESSING_CONCURRENCY }}
+          JOB_PROCESSING_BACKGROUND: ${{ secrets.JOB_PROCESSING_BACKGROUND }}
+          JOB_PROCESSING_QUEUE_POLL_SECONDS: ${{ secrets.JOB_PROCESSING_QUEUE_POLL_SECONDS }}
+          JOB_PROCESSING_QUEUE_BATCH_SIZE: ${{ secrets.JOB_PROCESSING_QUEUE_BATCH_SIZE }}
+          JOB_PROCESSING_RETRY_DELAY_SECONDS: ${{ secrets.JOB_PROCESSING_RETRY_DELAY_SECONDS }}
+          JOB_PROCESSING_MAX_ATTEMPTS: ${{ secrets.JOB_PROCESSING_MAX_ATTEMPTS }}
+          QUEUE_WAIT_TIMEOUT_SECONDS: ${{ secrets.QUEUE_WAIT_TIMEOUT_SECONDS }}
+
+          SCRAPE_LOCATION: ${{ secrets.SCRAPE_LOCATION }}
+          SCRAPE_MAX_PER_SOURCE: ${{ secrets.SCRAPE_MAX_PER_SOURCE }}
+
+          NOTIFY_TIMEZONE: ${{ secrets.NOTIFY_TIMEZONE }}
+          NOTIFY_TOP_K: ${{ secrets.NOTIFY_TOP_K }}
+          NOTIFY_MIN_TOP_APPLICANT: ${{ secrets.NOTIFY_MIN_TOP_APPLICANT }}
+          NOTIFY_MIN_RANKING_SCORE: ${{ secrets.NOTIFY_MIN_RANKING_SCORE }}
+          NOTIFY_PREFERRED_LOCATIONS: ${{ secrets.NOTIFY_PREFERRED_LOCATIONS }}
+          NOTIFY_CANDIDATE_LIMIT: ${{ secrets.NOTIFY_CANDIDATE_LIMIT }}
+
+          NOTIFY_EMAIL_PROVIDER: smtp
+          NOTIFY_EMAIL_SMTP_HOST: ${{ secrets.NOTIFY_EMAIL_SMTP_HOST }}
+          NOTIFY_EMAIL_SMTP_PORT: ${{ secrets.NOTIFY_EMAIL_SMTP_PORT }}
+          NOTIFY_EMAIL_SMTP_SSL: ${{ secrets.NOTIFY_EMAIL_SMTP_SSL }}
+          NOTIFY_EMAIL_USE_TLS: ${{ secrets.NOTIFY_EMAIL_USE_TLS }}
+          NOTIFY_EMAIL_SMTP_USER: ${{ secrets.NOTIFY_EMAIL_SMTP_USER }}
+          NOTIFY_EMAIL_SMTP_PASSWORD: ${{ secrets.NOTIFY_EMAIL_SMTP_PASSWORD }}
+          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+        run: |
+          chmod +x run_dry_run.sh
+          bash run_dry_run.sh
+
+      - name: Upload output artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jobfinder-output
+          path: |
+            output/*.json
+            output/*.log
+          if-no-files-found: ignore
