@@ -451,6 +451,123 @@ def get_job_by_url(url: str) -> dict | None:
         return conn.execute("SELECT * FROM jobs WHERE url = %(url)s", {"url": url}).fetchone()
 
 
+def create_job_recommendation_request(
+    *,
+    email: str,
+    requested_roles: list[str],
+    resume_original_name: str,
+    resume_stored_path: str,
+) -> int:
+    """Create or refresh a queued recommendation request keyed by unique email."""
+    roles = [str(role).strip() for role in requested_roles if str(role).strip()]
+    if not roles or len(roles) > 5:
+        raise ValueError("requested_roles must contain between 1 and 5 roles.")
+
+    normalized_email = email.strip().lower()
+    if not normalized_email:
+        raise ValueError("email cannot be empty.")
+
+    sql = """
+        INSERT INTO job_recommendation_requests (
+            email,
+            requested_roles,
+            resume_original_name,
+            resume_stored_path,
+            status,
+            notes,
+            created_at,
+            updated_at
+        ) VALUES (
+            %(email)s,
+            %(requested_roles)s,
+            %(resume_original_name)s,
+            %(resume_stored_path)s,
+            'queued',
+            '',
+            NOW(),
+            NOW()
+        )
+        ON CONFLICT (email) DO UPDATE SET
+            requested_roles      = EXCLUDED.requested_roles,
+            resume_original_name = EXCLUDED.resume_original_name,
+            resume_stored_path   = EXCLUDED.resume_stored_path,
+            status               = 'queued',
+            notes                = '',
+            updated_at           = NOW()
+        RETURNING id
+    """
+    params = {
+        "email": normalized_email,
+        "requested_roles": Jsonb(roles),
+        "resume_original_name": resume_original_name.strip(),
+        "resume_stored_path": resume_stored_path.strip(),
+    }
+    with _conn() as conn:
+        row = conn.execute(sql, params).fetchone()
+        conn.commit()
+    return int(row["id"]) if row else 0
+
+
+def get_recommendation_requests_by_status(
+    *,
+    status: str = "queued",
+    limit: int = 100,
+) -> list[dict]:
+    """Fetch recommendation requests by status, oldest first."""
+    sql = """
+        SELECT
+            id,
+            email,
+            requested_roles,
+            resume_original_name,
+            resume_stored_path,
+            status,
+            notes,
+            created_at,
+            updated_at
+        FROM job_recommendation_requests
+        WHERE status = %(status)s
+        ORDER BY created_at ASC, id ASC
+        LIMIT %(limit)s
+    """
+    params = {
+        "status": (status or "queued").strip().lower(),
+        "limit": max(1, int(limit)),
+    }
+    with _conn() as conn:
+        return conn.execute(sql, params).fetchall()
+
+
+def update_recommendation_request_status(
+    *,
+    request_id: int,
+    status: str,
+    notes: str = "",
+) -> int:
+    """Update recommendation request status and notes."""
+    normalized_status = (status or "").strip().lower()
+    allowed = {"queued", "processing", "done", "failed"}
+    if normalized_status not in allowed:
+        raise ValueError(f"Invalid status {status!r}. Expected one of {sorted(allowed)}")
+
+    sql = """
+        UPDATE job_recommendation_requests
+        SET status = %(status)s,
+            notes = %(notes)s,
+            updated_at = NOW()
+        WHERE id = %(request_id)s
+    """
+    params = {
+        "request_id": int(request_id),
+        "status": normalized_status,
+        "notes": (notes or "")[:2000],
+    }
+    with _conn() as conn:
+        cur = conn.execute(sql, params)
+        conn.commit()
+        return cur.rowcount
+
+
 # ── read operations ───────────────────────────────────────────────────────────
 
 def get_jobs(

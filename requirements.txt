@@ -18,3 +18,5 @@ beautifulsoup4>=4.12
 playwright>=1.44
 APScheduler>=3.10
 playwright-stealth>=1.0
+streamlit>=1.36
+boto3>=1.34

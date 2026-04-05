@@ -39,6 +39,8 @@ jobs:
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           NOTIFY_EMAIL_SMTP_HOST: ${{ secrets.NOTIFY_EMAIL_SMTP_HOST }}
           NOTIFY_EMAIL_SMTP_PORT: ${{ secrets.NOTIFY_EMAIL_SMTP_PORT }}
           NOTIFY_EMAIL_SMTP_SSL: ${{ secrets.NOTIFY_EMAIL_SMTP_SSL }}
@@ -46,20 +48,20 @@ jobs:
           NOTIFY_EMAIL_SMTP_USER: ${{ secrets.NOTIFY_EMAIL_SMTP_USER }}
           NOTIFY_EMAIL_SMTP_PASSWORD: ${{ secrets.NOTIFY_EMAIL_SMTP_PASSWORD }}
           NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
-          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
         run: |
           missing=0
           for key in \
             NVIDIA_API_KEY \
             DATABASE_URL \
+            AWS_ACCESS_KEY_ID \
+            AWS_SECRET_ACCESS_KEY \
             NOTIFY_EMAIL_SMTP_HOST \
             NOTIFY_EMAIL_SMTP_PORT \
             NOTIFY_EMAIL_SMTP_SSL \
             NOTIFY_EMAIL_USE_TLS \
             NOTIFY_EMAIL_SMTP_USER \
             NOTIFY_EMAIL_SMTP_PASSWORD \
-            NOTIFY_EMAIL_FROM \
-            NOTIFY_EMAIL_TO; do
+            NOTIFY_EMAIL_FROM; do
             if [ -z "${!key}" ]; then
               echo "Missing required secret: $key"
               missing=1
@@ -69,10 +71,15 @@ jobs:
             exit 1
           fi
 
-      - name: Run daily dry-run script
+      - name: Run daily request processor
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_S3_ENDPOINT_URL: ${{ secrets.AWS_S3_ENDPOINT_URL }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
@@ -111,10 +118,8 @@ jobs:
           NOTIFY_EMAIL_SMTP_USER: ${{ secrets.NOTIFY_EMAIL_SMTP_USER }}
           NOTIFY_EMAIL_SMTP_PASSWORD: ${{ secrets.NOTIFY_EMAIL_SMTP_PASSWORD }}
           NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
-          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
         run: |
-          chmod +x run_dry_run.sh
-          bash run_dry_run.sh
+          .venv/bin/python process_recommendation_requests.py
 
       - name: Upload output artifacts
         if: always()
@@ -122,6 +127,6 @@ jobs:
         with:
           name: jobfinder-output
           path: |
-            output/*.json
-            output/*.log
+            output/**/*.json
+            output/**/*.log
           if-no-files-found: ignore
