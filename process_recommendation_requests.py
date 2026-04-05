@@ -42,12 +42,31 @@ def _run_command(
     env: dict[str, str] | None = None,
     stdout_path: Path | None = None,
 ) -> None:
+    def _tail_text(path: Path, *, max_lines: int = 40) -> str:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            lines = text.splitlines()
+            return "\n".join(lines[-max_lines:])
+        except Exception:
+            return ""
+
     if stdout_path is not None:
         stdout_path.parent.mkdir(parents=True, exist_ok=True)
         with open(stdout_path, "w", encoding="utf-8") as out:
-            subprocess.run(cmd, check=True, env=env, stdout=out, stderr=subprocess.STDOUT)
+            try:
+                subprocess.run(cmd, check=True, env=env, stdout=out, stderr=subprocess.STDOUT)
+            except subprocess.CalledProcessError as exc:
+                tail = _tail_text(stdout_path)
+                message = f"Command failed ({exc.returncode}): {' '.join(cmd)}"
+                if tail:
+                    message += f"\n--- command output tail ---\n{tail}"
+                raise RuntimeError(message) from exc
         return
-    subprocess.run(cmd, check=True, env=env)
+
+    try:
+        subprocess.run(cmd, check=True, env=env)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"Command failed ({exc.returncode}): {' '.join(cmd)}") from exc
 
 
 def _run_queue_drain() -> None:
@@ -109,10 +128,10 @@ def process_requests() -> int:
     apply_schema()
 
     limit = int(os.environ.get("RECOMMENDATION_REQUEST_BATCH_SIZE", "50") or "50")
-    requests = get_recommendation_requests_by_status(status="queued", limit=limit)
+    requests = get_recommendation_requests_by_status(status=None, limit=limit)
 
     if not requests:
-        print("No queued recommendation requests found.")
+        print("No recommendation requests found.")
         return 0
 
     python_bin = Path(".venv/bin/python")

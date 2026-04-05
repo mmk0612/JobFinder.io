@@ -510,11 +510,11 @@ def create_job_recommendation_request(
 
 def get_recommendation_requests_by_status(
     *,
-    status: str = "queued",
+    status: str | None = "queued",
     limit: int = 100,
 ) -> list[dict]:
-    """Fetch recommendation requests by status, oldest first."""
-    sql = """
+    """Fetch recommendation requests, optionally filtered by status, oldest first."""
+    base_sql = """
         SELECT
             id,
             email,
@@ -526,14 +526,15 @@ def get_recommendation_requests_by_status(
             created_at,
             updated_at
         FROM job_recommendation_requests
-        WHERE status = %(status)s
-        ORDER BY created_at ASC, id ASC
-        LIMIT %(limit)s
     """
-    params = {
-        "status": (status or "queued").strip().lower(),
-        "limit": max(1, int(limit)),
-    }
+
+    params: dict[str, object] = {"limit": max(1, int(limit))}
+    if status is None:
+        sql = base_sql + " ORDER BY created_at ASC, id ASC LIMIT %(limit)s"
+    else:
+        sql = base_sql + " WHERE status = %(status)s ORDER BY created_at ASC, id ASC LIMIT %(limit)s"
+        params["status"] = (status or "queued").strip().lower()
+
     with _conn() as conn:
         return conn.execute(sql, params).fetchall()
 
