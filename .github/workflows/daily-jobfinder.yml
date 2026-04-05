@@ -119,7 +119,10 @@ jobs:
           NOTIFY_EMAIL_SMTP_PASSWORD: ${{ secrets.NOTIFY_EMAIL_SMTP_PASSWORD }}
           NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
         run: |
-          .venv/bin/python process_recommendation_requests.py
+          mkdir -p output/logs
+          RUN_LOG="output/logs/daily_request_processor_$(date -u +'%Y%m%dT%H%M%SZ').log"
+          echo "Writing run log to ${RUN_LOG}"
+          .venv/bin/python process_recommendation_requests.py 2>&1 | tee "${RUN_LOG}"
 
       - name: Upload output artifacts
         if: always()
