@@ -28,6 +28,7 @@ from src.db.db import (  # noqa: E402
     get_recommendation_requests_by_status,
     update_recommendation_request_status,
 )
+from src.job_processing_queue import get_queue_status  # noqa: E402
 from src.storage.s3_storage import download_s3_uri_to_path, parse_s3_uri  # noqa: E402
 
 
@@ -126,6 +127,16 @@ def _roles_from_row(raw_roles: object) -> list[str]:
 
 def process_requests() -> int:
     apply_schema()
+
+    # Check for existing queue backlog
+    queue_status = get_queue_status()
+    if queue_status.queued_jobs > 0 or queue_status.processing_jobs > 0:
+        print(
+            f"⚠️  WARNING: Job processing queue has existing backlog:\n"
+            f"   queued={queue_status.queued_jobs} processing={queue_status.processing_jobs}\n"
+            f"   done={queue_status.done_jobs} failed={queue_status.failed_jobs}\n"
+            f"   Consider investigating queue health if backlog persists across runs."
+        )
 
     limit = int(os.environ.get("RECOMMENDATION_REQUEST_BATCH_SIZE", "50") or "50")
     requests = get_recommendation_requests_by_status(status=None, limit=limit)
