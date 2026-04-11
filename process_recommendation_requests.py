@@ -77,7 +77,6 @@ def _run_queue_drain() -> None:
     from src.job_processing_queue import get_queue_status, start_worker, wait_until_idle_with_progress
     from src.job_processor import rebuild_job_index
 
-    timeout_seconds = int(os.environ.get("QUEUE_WAIT_TIMEOUT_SECONDS", "1800") or "1800")
     model_hint = NVIDIA_EMBEDDING_MODEL if EMBEDDING_PROVIDER == "nvidia" else DEFAULT_MODEL
     print(
         f"Embeddings in queue: provider={EMBEDDING_PROVIDER} "
@@ -94,6 +93,14 @@ def _run_queue_drain() -> None:
         f"Queue start: queued={initial.queued_jobs} processing={initial.processing_jobs} "
         f"done={initial.done_jobs} failed={initial.failed_jobs}"
     )
+
+    base_timeout_seconds = _base_queue_wait_timeout_seconds()
+    timeout_seconds = _adaptive_queue_wait_timeout_seconds(initial)
+    if timeout_seconds != base_timeout_seconds:
+        print(
+            f"Queue wait timeout adjusted to {timeout_seconds}s based on backlog "
+            f"(queued={initial.queued_jobs}, processing={initial.processing_jobs})"
+        )
 
     final = wait_until_idle_with_progress(
         timeout_seconds=timeout_seconds,
@@ -123,6 +130,22 @@ def _roles_from_row(raw_roles: object) -> list[str]:
 
     roles = [str(role).strip() for role in values if str(role).strip()]
     return roles[:5]
+
+
+def _base_queue_wait_timeout_seconds() -> int:
+    return max(1, int(os.environ.get("QUEUE_WAIT_TIMEOUT_SECONDS", "1800") or "1800"))
+
+
+def _adaptive_queue_wait_timeout_seconds(queue_status) -> int:
+    base_timeout = _base_queue_wait_timeout_seconds()
+    queued_bonus = max(0, int(os.environ.get("QUEUE_WAIT_TIMEOUT_PER_QUEUED_JOB_SECONDS", "20") or "20"))
+    processing_bonus = max(0, int(os.environ.get("QUEUE_WAIT_TIMEOUT_PER_PROCESSING_JOB_SECONDS", "120") or "120"))
+    max_timeout = max(base_timeout, int(os.environ.get("QUEUE_WAIT_TIMEOUT_MAX_SECONDS", "7200") or "7200"))
+
+    adaptive_timeout = base_timeout
+    adaptive_timeout += queue_status.queued_jobs * queued_bonus
+    adaptive_timeout += queue_status.processing_jobs * processing_bonus
+    return min(adaptive_timeout, max_timeout)
 
 
 def process_requests() -> int:
