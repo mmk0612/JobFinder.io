@@ -156,7 +156,10 @@ def _build_skill_mapping(raw_skills: list[str], *, use_llm: bool = True) -> dict
             remaining.append(skill)
 
     if remaining and use_llm:
-        llm_mapping = _llm_normalize(remaining)
+        try:
+            llm_mapping = _llm_normalize(remaining)
+        except Exception:
+            llm_mapping = {}
         for skill in remaining:
             mapping[skill] = llm_mapping.get(skill, skill.lower().strip())
     elif remaining:
@@ -228,7 +231,13 @@ def normalize_skills(structured_resume: dict) -> dict:
     for project in structured_resume.get("projects", []):
         raw_skills.extend(project.get("tech_stack", []))
 
-    mapping = _build_skill_mapping(raw_skills)
+    disable_llm = os.environ.get("JOB_DISABLE_LLM_SKILL_NORMALIZATION", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    mapping = _build_skill_mapping(raw_skills, use_llm=not disable_llm)
 
     # Apply mapping
     structured_resume["skills"] = [
