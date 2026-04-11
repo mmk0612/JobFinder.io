@@ -127,6 +127,17 @@ jobs:
           echo "Writing run log to ${RUN_LOG}"
           .venv/bin/python process_recommendation_requests.py 2>&1 | tee "${RUN_LOG}"
 
+      - name: Cleanup expired jobs
+        if: always()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          .venv/bin/python -c "
+from src.db.db import cleanup_expired_jobs
+result = cleanup_expired_jobs()
+print(f'Cleanup complete: {result}')
+          "
+
       - name: Upload output artifacts
         if: always()
         uses: actions/upload-artifact@v4

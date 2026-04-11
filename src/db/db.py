@@ -720,3 +720,24 @@ def count_jobs(*, source: str | None = None, active_only: bool = True) -> int:
     with _conn() as conn:
         row = conn.execute(f"SELECT COUNT(*) AS n FROM jobs {where}", params).fetchone()
         return int(row["n"]) if row else 0
+
+
+def cleanup_expired_jobs() -> dict[str, int]:
+    """
+    Delete expired jobs (expires_at < NOW()) and vacuum the table to reclaim space.
+
+    Returns {"deleted": n, "vacuumed": bool}.
+    """
+    with _conn() as conn:
+        # Delete expired jobs
+        delete_sql = "DELETE FROM jobs WHERE expires_at < NOW()"
+        cur = conn.execute(delete_sql)
+        deleted_count = cur.rowcount
+        conn.commit()
+
+        # Vacuum the table to reclaim space
+        conn.set_autocommit(True)
+        conn.execute("VACUUM jobs")
+        conn.set_autocommit(False)
+
+        return {"deleted": deleted_count, "vacuumed": True}
