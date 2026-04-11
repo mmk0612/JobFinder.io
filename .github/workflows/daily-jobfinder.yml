@@ -132,11 +132,12 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          .venv/bin/python -c "
-from src.db.db import cleanup_expired_jobs
-result = cleanup_expired_jobs()
-print(f'Cleanup complete: {result}')
-          "
+          .venv/bin/python - <<'PY'
+          from src.db.db import cleanup_expired_jobs
+
+          result = cleanup_expired_jobs()
+          print(f"Cleanup complete: {result}")
+          PY
 
       - name: Upload output artifacts
         if: always()
