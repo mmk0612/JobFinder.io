@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -68,6 +69,43 @@ def _run_command(
         subprocess.run(cmd, check=True, env=env)
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(f"Command failed ({exc.returncode}): {' '.join(cmd)}") from exc
+
+
+def _run_resume_pipeline_with_retries(
+    *,
+    python_bin: Path,
+    local_resume: Path,
+    resume_json_path: Path,
+) -> None:
+    """Run main.py with retries for transient LLM timeout failures."""
+    attempts = max(1, int(os.environ.get("RESUME_PIPELINE_MAX_ATTEMPTS", "3") or "3"))
+    delay_seconds = max(1, int(os.environ.get("RESUME_PIPELINE_RETRY_DELAY_SECONDS", "10") or "10"))
+
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            _run_command(
+                [
+                    str(python_bin),
+                    "main.py",
+                    "--resume",
+                    str(local_resume),
+                    "--output",
+                    str(resume_json_path),
+                ]
+            )
+            return
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= attempts:
+                break
+            print(
+                f"Resume pipeline attempt {attempt}/{attempts} failed; retrying in {delay_seconds}s..."
+            )
+            time.sleep(delay_seconds)
+
+    assert last_exc is not None
+    raise last_exc
 
 
 def _run_queue_drain() -> None:
@@ -212,15 +250,10 @@ def process_requests() -> int:
                 download_s3_uri_to_path(s3_uri=f"s3://{bucket}/{key}", destination_path=local_resume)
 
                 resume_json_path = request_output_dir / "structured_resume.json"
-                _run_command(
-                    [
-                        str(python_bin),
-                        "main.py",
-                        "--resume",
-                        str(local_resume),
-                        "--output",
-                        str(resume_json_path),
-                    ]
+                _run_resume_pipeline_with_retries(
+                    python_bin=python_bin,
+                    local_resume=local_resume,
+                    resume_json_path=resume_json_path,
                 )
 
                 resume_embeddings_path = resume_json_path.with_suffix(".embeddings.npz")
