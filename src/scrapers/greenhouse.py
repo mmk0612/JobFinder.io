@@ -19,7 +19,7 @@ import os
 import re
 from pathlib import Path
 
-from src.scrapers.base import BaseScraper
+from src.scrapers.base import BaseScraper, ExpectedHTTPStatusError
 from src.scrapers.models import JobListing
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,8 @@ class GreenhouseScraper(BaseScraper):
             try:
                 fetched = self._scrape_company(slug, kw_lower, location, max_results - len(jobs))
                 jobs.extend(fetched)
+            except ExpectedHTTPStatusError:
+                continue
             except Exception as exc:
                 logger.warning("[greenhouse] %s failed: %s", slug, exc)
             self.polite_sleep()
@@ -71,7 +73,7 @@ class GreenhouseScraper(BaseScraper):
         max_results: int,
     ) -> list[JobListing]:
         url = _API_URL.format(slug=slug)
-        resp = self._get(url, params={"content": "true"})
+        resp = self._get(url, params={"content": "true"}, ignore_status_codes={404})
         data = resp.json()
 
         jobs: list[JobListing] = []

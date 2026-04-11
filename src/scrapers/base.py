@@ -24,6 +24,10 @@ from src.scrapers.models import JobListing
 
 logger = logging.getLogger(__name__)
 
+
+class ExpectedHTTPStatusError(requests.RequestException):
+    """Raised when a scraper wants to ignore a known HTTP status."""
+
 # A small rotation of realistic desktop User-Agents
 _USER_AGENTS: list[str] = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -105,6 +109,7 @@ class BaseScraper(abc.ABC):
         timeout: int = 15,
         retries: int = _MAX_RETRIES,
         retry_backoff: float = _RETRY_BACKOFF,
+        ignore_status_codes: set[int] | None = None,
     ) -> Response:
         """
         Perform an HTTP GET with automatic retry + UA rotation.
@@ -117,6 +122,7 @@ class BaseScraper(abc.ABC):
 
         last_exc: Exception | None = None
         retries = max(1, retries)
+        ignore_status_codes = ignore_status_codes or set()
         for attempt in range(1, retries + 1):
             try:
                 resp = self._session.get(
@@ -133,6 +139,10 @@ class BaseScraper(abc.ABC):
                 # Keep retries for transient statuses like 408/429 and all 5xx responses.
                 if isinstance(exc, requests.HTTPError) and exc.response is not None:
                     status = int(exc.response.status_code)
+                    if status in ignore_status_codes:
+                        raise ExpectedHTTPStatusError(
+                            f"[{self.source_name}] GET {url} returned ignored status {status}"
+                        ) from exc
                     retriable_client = {408, 429}
                     if 400 <= status < 500 and status not in retriable_client:
                         logger.warning(
