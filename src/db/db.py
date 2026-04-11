@@ -445,6 +445,26 @@ def get_job_processing_queue_counts() -> dict[str, int]:
     return counts
 
 
+def clear_job_processing_queue(*, include_done: bool = False) -> int:
+    """
+    Clear queue rows and return number of deleted rows.
+
+    By default, only pending/error rows are removed (queued, processing, failed)
+    and completed history rows (`done`) are kept.
+    """
+    if include_done:
+        sql = "DELETE FROM job_processing_queue"
+        params: dict[str, object] = {}
+    else:
+        sql = "DELETE FROM job_processing_queue WHERE status <> %(done)s"
+        params = {"done": "done"}
+
+    with _conn() as conn:
+        cur = conn.execute(sql, params)
+        conn.commit()
+        return cur.rowcount
+
+
 def get_job_by_url(url: str) -> dict | None:
     """Fetch one job row by URL."""
     with _conn() as conn:

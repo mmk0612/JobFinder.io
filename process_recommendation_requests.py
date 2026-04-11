@@ -26,6 +26,7 @@ load_dotenv()
 
 from src.db.db import (  # noqa: E402
     apply_schema,
+    clear_job_processing_queue,
     get_recommendation_requests_by_status,
     update_recommendation_request_status,
 )
@@ -186,8 +187,30 @@ def _adaptive_queue_wait_timeout_seconds(queue_status) -> int:
     return min(adaptive_timeout, max_timeout)
 
 
+def _clear_queue_if_requested() -> None:
+    clear_on_start = os.environ.get("QUEUE_CLEAR_ON_START", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not clear_on_start:
+        return
+
+    include_done = os.environ.get("QUEUE_CLEAR_INCLUDE_DONE", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    deleted = clear_job_processing_queue(include_done=include_done)
+    mode = "all rows" if include_done else "queued/processing/failed rows"
+    print(f"⚠️  Queue clear requested on startup: deleted {deleted} {mode}.")
+
+
 def process_requests() -> int:
     apply_schema()
+    _clear_queue_if_requested()
 
     # Check for existing queue backlog
     queue_status = get_queue_status()
