@@ -44,6 +44,9 @@ RANKING_WEIGHTS = {
     "location_preference": float(os.environ.get("RANKING_WEIGHT_LOCATION_PREFERENCE", "0.15") or "0.15"),
 }
 
+USD_TO_INR = float(os.environ.get("SALARY_USD_TO_INR", "83.0") or "83.0")
+USD_TO_INR = max(1.0, USD_TO_INR)
+
 _RANKING_WEIGHT_SUM = sum(max(0.0, value) for value in RANKING_WEIGHTS.values())
 if _RANKING_WEIGHT_SUM <= 0:
     RANKING_WEIGHTS = {
@@ -624,7 +627,14 @@ def _location_preference_score(*, job_location: str, preferred_locations: list[s
 
 
 def _salary_bounds(job_rows: list[dict]) -> tuple[float, float] | None:
-    values = [value for value in (_salary_midpoint_from_text(str(row.get("salary", "") or "")) for row in job_rows) if value is not None]
+    values = [
+        value
+        for value in (
+            _salary_midpoint_usd_from_text(str(row.get("salary", "") or ""))
+            for row in job_rows
+        )
+        if value is not None
+    ]
     if not values:
         return None
     low, high = min(values), max(values)
@@ -636,35 +646,59 @@ def _salary_bounds(job_rows: list[dict]) -> tuple[float, float] | None:
 def _salary_score_from_row(row: dict, *, salary_bounds: tuple[float, float] | None) -> float:
     if salary_bounds is None:
         return 0.5
-    value = _salary_midpoint_from_text(str(row.get("salary", "") or ""))
+    value = _salary_midpoint_usd_from_text(str(row.get("salary", "") or ""))
     if value is None:
         return 0.45
     low, high = salary_bounds
     return _clamp01((value - low) / (high - low))
 
 
-def _salary_midpoint_from_text(raw_salary: str) -> float | None:
+def _salary_midpoint_usd_from_text(raw_salary: str) -> float | None:
+    """
+    Parse salary text and return midpoint normalized to USD.
+
+    Supports common USD and INR formats, including INR units like
+    lakh/lac/lpa and crore/cr.
+    """
     text = str(raw_salary or "").strip().lower()
     if not text:
         return None
 
+    is_inr = _is_inr_salary_text(text)
+    is_usd = _is_usd_salary_text(text)
+
     numbers: list[float] = []
-    for match in re.finditer(r"(\d+(?:[\.,]\d+)?)\s*([kKmM]?)", text):
+    for match in re.finditer(r"(\d+(?:[\.,]\d+)?)\s*(k|m|lpa|lac|lakh|cr|crore)?", text):
         base = float(match.group(1).replace(",", ""))
-        suffix = match.group(2).lower()
+        suffix = (match.group(2) or "").lower()
         if suffix == "k":
             base *= 1_000.0
         elif suffix == "m":
             base *= 1_000_000.0
+        elif suffix in {"lpa", "lac", "lakh"}:
+            base *= 100_000.0
+        elif suffix in {"cr", "crore"}:
+            base *= 10_000_000.0
         elif base < 1_000 and "$" in text:
             base *= 1_000.0
         numbers.append(base)
 
     if not numbers:
         return None
-    if len(numbers) == 1:
-        return numbers[0]
-    return (min(numbers) + max(numbers)) / 2.0
+    midpoint = numbers[0] if len(numbers) == 1 else (min(numbers) + max(numbers)) / 2.0
+
+    # If only INR is detected, convert INR -> USD using configurable FX rate.
+    if is_inr and not is_usd:
+        return midpoint / USD_TO_INR
+    return midpoint
+
+
+def _is_inr_salary_text(text: str) -> bool:
+    return bool(re.search(r"(₹|\binr\b|\brs\.?\b|\brupees?\b|\blpa\b|\blac\b|\blakh\b|\bcr\b|\bcrore\b)", text))
+
+
+def _is_usd_salary_text(text: str) -> bool:
+    return bool(re.search(r"(\$|\busd\b|\bdollars?\b)", text))
 
 
 def _company_reputation_score(*, company_name: str, hiring_aggressiveness: float) -> float:

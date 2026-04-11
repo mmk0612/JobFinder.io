@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import re
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Generator
@@ -27,6 +28,83 @@ from src.scrapers.models import JobListing
 
 
 TTL_DURATION = timedelta(days=30)
+SALARY_USD_TO_INR = float(os.environ.get("SALARY_USD_TO_INR", "83.0") or "83.0")
+SALARY_USD_TO_INR = max(1.0, SALARY_USD_TO_INR)
+
+
+def _format_inr(value: float) -> str:
+    """Format numeric value to INR with Indian grouping commas."""
+    amount = int(round(max(0.0, value)))
+    text = str(amount)
+    if len(text) <= 3:
+        return f"INR {text}"
+    head = text[:-3]
+    tail = text[-3:]
+    groups: list[str] = []
+    while len(head) > 2:
+        groups.append(head[-2:])
+        head = head[:-2]
+    if head:
+        groups.append(head)
+    return f"INR {','.join(reversed(groups))},{tail}"
+
+
+def _is_inr_salary_text(text: str) -> bool:
+    return bool(re.search(r"(₹|\binr\b|\brs\.?\b|\brupees?\b|\blpa\b|\blac\b|\blakh\b|\bcr\b|\bcrore\b)", text))
+
+
+def _is_usd_salary_text(text: str) -> bool:
+    return bool(re.search(r"(\$|\busd\b|\bdollars?\b)", text))
+
+
+def _salary_values_from_text(raw_salary: str) -> list[float]:
+    numbers: list[float] = []
+    for match in re.finditer(r"(\d+(?:[\.,]\d+)?)\s*(k|m|lpa|lac|lakh|cr|crore)?", raw_salary):
+        base = float(match.group(1).replace(",", ""))
+        suffix = (match.group(2) or "").lower()
+        if suffix == "k":
+            base *= 1_000.0
+        elif suffix == "m":
+            base *= 1_000_000.0
+        elif suffix in {"lpa", "lac", "lakh"}:
+            base *= 100_000.0
+        elif suffix in {"cr", "crore"}:
+            base *= 10_000_000.0
+        elif base < 1_000 and "$" in raw_salary:
+            base *= 1_000.0
+        numbers.append(base)
+    return numbers
+
+
+def normalize_salary_to_inr(raw_salary: str) -> str:
+    """
+    Normalize salary text to INR-only representation for DB storage.
+
+    Examples:
+      "$120k - $150k" -> "INR 99,60,000 - INR 1,24,50,000"
+      "12-18 LPA"     -> "INR 12,00,000 - INR 18,00,000"
+    """
+    text = str(raw_salary or "").strip()
+    if not text:
+        return ""
+
+    lowered = text.lower()
+    values = _salary_values_from_text(lowered)
+    if not values:
+        return text
+
+    is_inr = _is_inr_salary_text(lowered)
+    is_usd = _is_usd_salary_text(lowered)
+
+    if is_usd and not is_inr:
+        values = [value * SALARY_USD_TO_INR for value in values]
+
+    if len(values) == 1:
+        return _format_inr(values[0])
+
+    low = min(values)
+    high = max(values)
+    return f"{_format_inr(low)} - {_format_inr(high)}"
 
 
 # ── connection pool ───────────────────────────────────────────────────────────
@@ -126,8 +204,10 @@ def upsert_job(job: JobListing) -> bool:
         RETURNING (xmax = 0) AS inserted
     """
     scraped_at = datetime.now(timezone.utc)
+    payload = job.to_dict()
+    payload["salary"] = normalize_salary_to_inr(payload.get("salary", ""))
     params = {
-        **job.to_dict(),
+        **payload,
         "scraped_at": scraped_at,
         "expires_at": scraped_at + TTL_DURATION,
     }
@@ -149,6 +229,44 @@ def upsert_jobs(jobs: list[JobListing]) -> dict[str, int]:
         else:
             updated += 1
     return {"inserted": inserted, "updated": updated}
+
+
+def backfill_job_salaries_to_inr(*, limit: int = 10000, offset: int = 0) -> int:
+    """
+    Convert existing non-empty salary rows in `jobs` table to INR format.
+
+    Returns number of rows updated in this batch.
+    """
+    sql_select = """
+        SELECT id, salary
+        FROM jobs
+        WHERE COALESCE(salary, '') <> ''
+        ORDER BY id ASC
+        LIMIT %(limit)s OFFSET %(offset)s
+    """
+    sql_update = """
+        UPDATE jobs
+        SET salary = %(salary)s
+        WHERE id = %(id)s
+    """
+
+    rows_updated = 0
+    with _conn() as conn:
+        rows = conn.execute(
+            sql_select,
+            {"limit": max(1, int(limit)), "offset": max(0, int(offset))},
+        ).fetchall()
+
+        for row in rows:
+            original = str(row.get("salary", "") or "")
+            normalized = normalize_salary_to_inr(original)
+            if normalized != original:
+                conn.execute(sql_update, {"id": int(row["id"]), "salary": normalized})
+                rows_updated += 1
+
+        conn.commit()
+
+    return rows_updated
 
 
 def mark_stale_jobs_inactive(source: str, scraped_before: datetime) -> int:
