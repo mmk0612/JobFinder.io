@@ -152,14 +152,33 @@ CREATE INDEX IF NOT EXISTS idx_recommendation_requests_status_created
     ON job_recommendation_requests (status, created_at DESC);
 
 -- Migration-safe normalization for unique (email, role) constraint.
-ALTER TABLE job_recommendation_requests
+-- Drop old constraints that reference the old requested_roles array.
+BEGIN;
+
+-- Drop the old check constraint if it exists
+ALTER TABLE IF EXISTS job_recommendation_requests
+    DROP CONSTRAINT IF EXISTS chk_recommendation_requests_roles_count;
+
+-- Drop the old unique constraint if it exists (it was on email only)
+ALTER TABLE IF EXISTS job_recommendation_requests
+    DROP CONSTRAINT IF EXISTS uq_recommendation_requests_email;
+
+-- Drop the old index if it exists
+DROP INDEX IF EXISTS uq_recommendation_requests_email;
+
+-- Add the new requested_role column if it doesn't exist
+ALTER TABLE IF EXISTS job_recommendation_requests
     ADD COLUMN IF NOT EXISTS requested_role TEXT;
 
+-- Normalize existing data
 UPDATE job_recommendation_requests
 SET email = lower(trim(email)),
     requested_role = COALESCE(requested_role, 'default'),
     updated_at = NOW()
-WHERE email <> lower(trim(email)) OR requested_role IS NULL OR requested_role = '';
+WHERE requested_role IS NULL OR requested_role = '';
 
+-- Create the new unique constraint on (email, role)
 CREATE UNIQUE INDEX IF NOT EXISTS uq_recommendation_requests_email_role
     ON job_recommendation_requests (email, requested_role);
+
+COMMIT;
