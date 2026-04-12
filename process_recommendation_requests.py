@@ -155,7 +155,13 @@ def _run_queue_drain() -> None:
     print(f"Job index rebuilt with {indexed} vector(s)")
 
 
-def _roles_from_row(raw_roles: object) -> list[str]:
+def _roles_from_row(raw_roles: object, raw_role: object | None = None) -> list[str]:
+    roles: list[str] = []
+
+    single = str(raw_role or "").strip()
+    if single:
+        roles.append(single)
+
     if isinstance(raw_roles, list):
         values = raw_roles
     elif isinstance(raw_roles, str):
@@ -167,8 +173,8 @@ def _roles_from_row(raw_roles: object) -> list[str]:
     else:
         values = []
 
-    roles = [str(role).strip() for role in values if str(role).strip()]
-    return roles[:5]
+    roles.extend(str(role).strip() for role in values if str(role).strip())
+    return list(dict.fromkeys(roles))[:5]
 
 
 def _base_queue_wait_timeout_seconds() -> int:
@@ -243,7 +249,7 @@ def process_requests() -> int:
         request_id = int(row["id"])
         email = str(row.get("email") or "").strip().lower()
         resume_s3_uri = str(row.get("resume_stored_path") or "").strip()
-        roles = _roles_from_row(row.get("requested_roles"))
+        roles = _roles_from_row(row.get("requested_roles"), row.get("requested_role"))
 
         print(f"\n=== Request {request_id} ===")
         print(f"email={email}")

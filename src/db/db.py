@@ -652,28 +652,42 @@ def get_recommendation_requests_by_status(
     limit: int = 100,
 ) -> list[dict]:
     """Fetch recommendation requests, optionally filtered by status, oldest first."""
-    base_sql = """
-        SELECT
-            id,
-            email,
-            requested_roles,
-            resume_original_name,
-            resume_stored_path,
-            status,
-            notes,
-            created_at,
-            updated_at
-        FROM job_recommendation_requests
-    """
-
     params: dict[str, object] = {"limit": max(1, int(limit))}
-    if status is None:
-        sql = base_sql + " ORDER BY created_at ASC, id ASC LIMIT %(limit)s"
-    else:
-        sql = base_sql + " WHERE status = %(status)s ORDER BY created_at ASC, id ASC LIMIT %(limit)s"
-        params["status"] = (status or "queued").strip().lower()
-
     with _conn() as conn:
+        column_rows = conn.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'job_recommendation_requests'
+            """
+        ).fetchall()
+        columns = {str(row["column_name"]) for row in column_rows}
+
+        requested_role_expr = "requested_role" if "requested_role" in columns else "NULL::TEXT AS requested_role"
+        requested_roles_expr = "requested_roles" if "requested_roles" in columns else "NULL::JSONB AS requested_roles"
+
+        base_sql = f"""
+            SELECT
+                id,
+                email,
+                {requested_role_expr},
+                {requested_roles_expr},
+                resume_original_name,
+                resume_stored_path,
+                status,
+                notes,
+                created_at,
+                updated_at
+            FROM job_recommendation_requests
+        """
+
+        if status is None:
+            sql = base_sql + " ORDER BY created_at ASC, id ASC LIMIT %(limit)s"
+        else:
+            sql = base_sql + " WHERE status = %(status)s ORDER BY created_at ASC, id ASC LIMIT %(limit)s"
+            params["status"] = (status or "queued").strip().lower()
+
         return conn.execute(sql, params).fetchall()
 
 
