@@ -134,7 +134,7 @@ CREATE INDEX IF NOT EXISTS idx_job_processing_queue_worker
 CREATE TABLE IF NOT EXISTS job_recommendation_requests (
     id                     BIGSERIAL PRIMARY KEY,
     email                  TEXT        NOT NULL,
-    requested_roles        JSONB       NOT NULL DEFAULT '[]'::jsonb,
+    requested_role         TEXT        NOT NULL,
     resume_original_name   TEXT        NOT NULL,
     resume_stored_path     TEXT        NOT NULL,
     status                 TEXT        NOT NULL DEFAULT 'queued', -- queued | processing | done | failed
@@ -144,34 +144,22 @@ CREATE TABLE IF NOT EXISTS job_recommendation_requests (
 
     CONSTRAINT chk_recommendation_requests_status
         CHECK (status IN ('queued', 'processing', 'done', 'failed')),
-    CONSTRAINT chk_recommendation_requests_roles_count
-        CHECK (jsonb_typeof(requested_roles) = 'array' AND jsonb_array_length(requested_roles) BETWEEN 1 AND 5)
+    CONSTRAINT chk_recommendation_requests_role_not_empty
+        CHECK (requested_role <> '' AND requested_role IS NOT NULL)
 );
 
 CREATE INDEX IF NOT EXISTS idx_recommendation_requests_status_created
     ON job_recommendation_requests (status, created_at DESC);
 
--- Migration-safe normalization for unique user profile rows.
+-- Migration-safe normalization for unique (email, role) constraint.
+ALTER TABLE job_recommendation_requests
+    ADD COLUMN IF NOT EXISTS requested_role TEXT;
+
 UPDATE job_recommendation_requests
 SET email = lower(trim(email)),
+    requested_role = COALESCE(requested_role, 'default'),
     updated_at = NOW()
-WHERE email <> lower(trim(email));
+WHERE email <> lower(trim(email)) OR requested_role IS NULL OR requested_role = '';
 
-DELETE FROM job_recommendation_requests q
-USING (
-    SELECT id
-    FROM (
-        SELECT
-            id,
-            row_number() OVER (
-                PARTITION BY email
-                ORDER BY updated_at DESC, id DESC
-            ) AS rn
-        FROM job_recommendation_requests
-    ) dedupe
-    WHERE dedupe.rn > 1
-) old_rows
-WHERE q.id = old_rows.id;
-
-CREATE UNIQUE INDEX IF NOT EXISTS uq_recommendation_requests_email
-    ON job_recommendation_requests (email);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_recommendation_requests_email_role
+    ON job_recommendation_requests (email, requested_role);

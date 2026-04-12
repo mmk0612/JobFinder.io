@@ -156,19 +156,59 @@ def send_daily_email_digest(
     dry_run: bool = False,
     job_keyword: str | None = None,
 ) -> dict:
-    """Compute and send today's strong-match email digest."""
-    matches = collect_strong_matches_today(
-        resume_json_path=resume_json_path,
-        resume_embeddings_path=resume_embeddings_path,
-        timezone_name=timezone_name,
-        top_k=top_k,
-        min_top_applicant=min_top_applicant,
-        min_ranking_score=min_ranking_score,
-        source=source,
-        candidate_limit=candidate_limit,
-        job_keyword=job_keyword,
+    """Compute and send today's strong-match email digest with monitoring params."""
+    # Step 1: Load all matchable jobs
+    all_matchable = get_matchable_jobs(source=source, limit=max(1, candidate_limit))
+    total_matchable = len(all_matchable)
+    
+    # Step 2: Filter to today's jobs
+    jobs_today = [
+        job for job in all_matchable
+        if isinstance(job.get("scraped_at"), datetime)
+        and _is_today_in_timezone(job["scraped_at"], timezone_name=timezone_name)
+    ]
+    total_today = len(jobs_today)
+    
+    # Step 3: Apply keyword filter if provided
+    if job_keyword and str(job_keyword).strip():
+        jobs_today_filtered = [job for job in jobs_today if _job_matches_keyword(job, job_keyword)]
+    else:
+        jobs_today_filtered = jobs_today
+    total_keyword_match = len(jobs_today_filtered)
+    
+    # Step 4: Rank all jobs
+    structured_resume, profile_embedding = load_resume_artifacts(
+        resume_json_path,
+        resume_embeddings_path,
     )
-
+    
+    ranked = rank_jobs_for_resume(
+        structured_resume=structured_resume,
+        resume_embedding=profile_embedding,
+        job_rows=jobs_today_filtered,
+        top_k=max(10, len(jobs_today_filtered)),
+        min_score=0.0,
+        preferred_locations=_parse_pref_locations(),
+    )
+    
+    # Step 5: Filter by thresholds
+    strong = [
+        match for match in ranked
+        if match.top_applicant_score >= int(min_top_applicant)
+        and match.ranking_score >= float(min_ranking_score)
+    ]
+    
+    # Step 6: Compute filtering metrics
+    total_ranked = len(ranked)
+    failed_top_applicant = sum(1 for m in ranked if m.top_applicant_score < int(min_top_applicant))
+    failed_ranking_score = sum(1 for m in ranked if m.ranking_score < float(min_ranking_score))
+    
+    top_applicant_dist = [m.top_applicant_score for m in ranked]
+    ranking_score_dist = [m.ranking_score for m in ranked]
+    
+    strong.sort(key=lambda item: (item.ranking_score, item.top_applicant_score, item.score), reverse=True)
+    matches = strong[: max(1, top_k)]
+    
     body = build_daily_email_body(matches, timezone_name=timezone_name)
     keyword_suffix = f' for "{job_keyword}"' if job_keyword and str(job_keyword).strip() else ""
     subject = f"JobFinder Daily: {len(matches)} strong matches today{keyword_suffix}"
@@ -184,4 +224,27 @@ def send_daily_email_digest(
         "job_keyword": job_keyword or "",
         "matches": [asdict(match) for match in matches],
         "body": body,
+        # Monitoring params for improvement analysis
+        "monitoring": {
+            "total_matchable_jobs": total_matchable,
+            "total_today": total_today,
+            "total_keyword_match": total_keyword_match,
+            "total_ranked": total_ranked,
+            "failed_top_applicant_threshold": failed_top_applicant,
+            "failed_ranking_score_threshold": failed_ranking_score,
+            "top_applicant_score_distribution": {
+                "min": min(top_applicant_dist) if top_applicant_dist else None,
+                "max": max(top_applicant_dist) if top_applicant_dist else None,
+                "mean": sum(top_applicant_dist) / len(top_applicant_dist) if top_applicant_dist else None,
+            },
+            "ranking_score_distribution": {
+                "min": min(ranking_score_dist) if ranking_score_dist else None,
+                "max": max(ranking_score_dist) if ranking_score_dist else None,
+                "mean": sum(ranking_score_dist) / len(ranking_score_dist) if ranking_score_dist else None,
+            },
+            "thresholds": {
+                "min_top_applicant": min_top_applicant,
+                "min_ranking_score": min_ranking_score,
+            },
+        },
     }

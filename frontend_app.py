@@ -26,7 +26,6 @@ ROLE_OPTIONS = [
 ]
 
 EMAIL_PATTERN = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
-MAX_ROLES = 5
 
 
 @st.cache_resource
@@ -129,7 +128,7 @@ def main() -> None:
 
     st.title("JobFinder Candidate Intake")
     st.markdown(
-        "<p class='caption-strip'>Tell us your target roles, upload your latest resume, and we will queue your request for the scheduled recommendation pipeline.</p>",
+        "<p class='caption-strip'>Select your target role, upload your latest resume, and we will queue your request for the scheduled recommendation pipeline.</p>",
         unsafe_allow_html=True,
     )
 
@@ -138,11 +137,10 @@ def main() -> None:
 
         with st.form("candidate_intake_form", clear_on_submit=True):
             email = st.text_input("Email ID", placeholder="name@example.com")
-            roles = st.multiselect(
-                "Prominent roles you want recommendations for",
+            role = st.selectbox(
+                "Target role for recommendations",
                 options=ROLE_OPTIONS,
-                max_selections=MAX_ROLES,
-                help="Pick up to 5 roles.",
+                help="Select the role you want recommendations for.",
             )
             resume = st.file_uploader(
                 "Latest resume (PDF)",
@@ -161,12 +159,8 @@ def main() -> None:
         st.error("Please enter a valid email address.")
         return
 
-    if not roles:
-        st.error("Please select at least one role.")
-        return
-
-    if len(roles) > MAX_ROLES:
-        st.error("Please select at most 5 roles.")
+    if not role:
+        st.error("Please select a role.")
         return
 
     if resume is None:
@@ -179,14 +173,17 @@ def main() -> None:
             content_bytes=bytes(resume.getbuffer()),
             content_type=resume.type or "application/pdf",
         )
+        
+        # Create request for the selected role
         request_id = create_job_recommendation_request(
             email=email,
-            requested_roles=roles,
+            requested_role=role,
             resume_original_name=resume.name,
             resume_stored_path=stored_resume_path,
         )
+        
         st.success(
-            f"Request queued successfully. Request ID: {request_id}. "
+            f"✓ Request queued successfully for {role}. Request ID: {request_id}. "
             "The scheduler will pick this up in the next run and email your recommendations."
         )
     except Exception as exc:

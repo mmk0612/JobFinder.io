@@ -592,23 +592,24 @@ def get_job_by_url(url: str) -> dict | None:
 def create_job_recommendation_request(
     *,
     email: str,
-    requested_roles: list[str],
+    requested_role: str,
     resume_original_name: str,
     resume_stored_path: str,
 ) -> int:
-    """Create or refresh a queued recommendation request keyed by unique email."""
-    roles = [str(role).strip() for role in requested_roles if str(role).strip()]
-    if not roles or len(roles) > 5:
-        raise ValueError("requested_roles must contain between 1 and 5 roles.")
+    """Create or refresh a queued recommendation request keyed by unique (email, role)."""
+    if not requested_role or not str(requested_role).strip():
+        raise ValueError("requested_role cannot be empty.")
 
     normalized_email = email.strip().lower()
+    normalized_role = str(requested_role).strip()
+
     if not normalized_email:
         raise ValueError("email cannot be empty.")
 
     sql = """
         INSERT INTO job_recommendation_requests (
             email,
-            requested_roles,
+            requested_role,
             resume_original_name,
             resume_stored_path,
             status,
@@ -617,7 +618,7 @@ def create_job_recommendation_request(
             updated_at
         ) VALUES (
             %(email)s,
-            %(requested_roles)s,
+            %(requested_role)s,
             %(resume_original_name)s,
             %(resume_stored_path)s,
             'queued',
@@ -625,8 +626,7 @@ def create_job_recommendation_request(
             NOW(),
             NOW()
         )
-        ON CONFLICT (email) DO UPDATE SET
-            requested_roles      = EXCLUDED.requested_roles,
+        ON CONFLICT (email, requested_role) DO UPDATE SET
             resume_original_name = EXCLUDED.resume_original_name,
             resume_stored_path   = EXCLUDED.resume_stored_path,
             status               = 'queued',
@@ -636,7 +636,7 @@ def create_job_recommendation_request(
     """
     params = {
         "email": normalized_email,
-        "requested_roles": Jsonb(roles),
+        "requested_role": normalized_role,
         "resume_original_name": resume_original_name.strip(),
         "resume_stored_path": resume_stored_path.strip(),
     }
