@@ -130,7 +130,7 @@ def _inject_styles() -> None:
     )
 
 
-def _render_intake_tab() -> None:
+def _render_dashboard() -> None:
     st.title("JobFinder Candidate Intake")
     st.markdown(
         "<p class='caption-strip'>Select your target role, upload your latest resume, and we will queue your request for the scheduled recommendation pipeline.</p>",
@@ -195,7 +195,39 @@ def _render_intake_tab() -> None:
         st.error(f"Could not queue request: {exc}")
 
 
-def _render_agent_studio_tab() -> None:
+def _execute_and_display_result(context: dict) -> None:
+    with st.spinner("Running orchestrator..."):
+        try:
+            result = run_orchestrator(context)
+        except Exception as exc:
+            st.error(f"Orchestrator run failed: {exc}")
+            return
+
+    st.success(f"Run completed with status: {result.get('status', 'unknown')}")
+    st.subheader("Execution Summary")
+    st.json(
+        {
+            "execution_plan": result.get("execution_plan", []),
+            "available_agents": result.get("available_agents", []),
+            "next_actions": result.get("next_actions", []),
+        }
+    )
+
+    run_info = result.get("run", {})
+    steps = run_info.get("steps", [])
+    if steps:
+        st.subheader("Workflow Steps")
+        st.dataframe(steps, use_container_width=True)
+
+    outputs = result.get("outputs", {})
+    if outputs:
+        st.subheader("Agent Outputs")
+        for agent_name, payload in outputs.items():
+            with st.expander(agent_name, expanded=False):
+                st.json(payload)
+
+
+def _render_workflow_monitor() -> None:
     st.header("Orchestrator Agent Studio")
     st.caption("Run orchestrated agent plans with live context and inspect outputs.")
 
@@ -322,50 +354,234 @@ def _render_agent_studio_tab() -> None:
     if structured_resume is not None:
         context["structured_resume"] = structured_resume
 
-    try:
-        result = run_orchestrator(context)
-    except Exception as exc:
-        st.error(f"Orchestrator run failed: {exc}")
-        return
+    _execute_and_display_result(context)
 
-    st.success(f"Run completed with status: {result.get('status', 'unknown')}")
-    st.subheader("Execution Summary")
-    st.json(
-        {
-            "execution_plan": result.get("execution_plan", []),
-            "available_agents": result.get("available_agents", []),
-            "next_actions": result.get("next_actions", []),
+
+def _render_job_discovery() -> None:
+    st.title("Job Discovery")
+    st.markdown("Discover personalized job recommendations and search across platforms.")
+    
+    sources = ["", "hn", "greenhouse", "linkedin"]
+    
+    with st.form("job_discovery_form"):
+        keywords = st.text_input("Keywords", placeholder="software engineer")
+        target_roles = st.text_input("Target Roles (comma-separated)", placeholder="Backend Engineer, AI Engineer")
+        source = st.selectbox("Source filter (optional)", options=sources, index=0)
+        max_results = st.number_input("Max results per source", min_value=1, max_value=200, value=25)
+        save_to_db = st.checkbox("Save scraped jobs to DB", value=True)
+        
+        submitted = st.form_submit_button("Discover Jobs")
+        
+    if submitted:
+        roles_list = [role.strip() for role in target_roles.split(",") if role.strip()]
+        context = {
+            "intent": "discover_jobs",
+            "keywords": keywords.strip(),
+            "target_roles": roles_list,
+            "source": source,
+            "max_results_per_source": int(max_results),
+            "save_to_db": bool(save_to_db)
         }
-    )
+        _execute_and_display_result(context)
 
-    run_info = result.get("run", {})
-    steps = run_info.get("steps", [])
-    if steps:
-        st.subheader("Workflow Steps")
-        st.dataframe(steps, use_container_width=True)
+def _render_company_research() -> None:
+    st.title("Company Research")
+    st.markdown("Deep dive into company culture, financials, and recent news.")
+    
+    with st.form("company_research_form"):
+        company = st.text_input("Company Name", placeholder="Google")
+        submitted = st.form_submit_button("Research Company")
+        
+    if submitted:
+        context = {
+            "intent": "research_company",
+            "company": company.strip()
+        }
+        _execute_and_display_result(context)
 
-    outputs = result.get("outputs", {})
-    if outputs:
-        st.subheader("Agent Outputs")
-        for agent_name, payload in outputs.items():
-            with st.expander(agent_name, expanded=False):
-                st.json(payload)
+def _render_applications() -> None:
+    st.title("Applications")
+    st.markdown("Track and manage your job applications pipeline.")
+    
+    actions = ["list", "track", "update"]
+    statuses = ["saved", "applied", "interviewing", "offered", "rejected", "archived"]
+    
+    with st.form("applications_form"):
+        action = st.selectbox("Action", options=actions)
+        email = st.text_input("Email", placeholder="name@example.com")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            status = st.selectbox("Status", options=statuses)
+            record_id = st.text_input("Record ID (for update)", placeholder="123")
+        with col2:
+            target_job_url = st.text_input("Target Job URL")
+            follow_up = st.text_input("Follow-up Date (ISO)", placeholder="2026-07-25T10:00:00")
+            
+        notes = st.text_area("Notes")
+        
+        submitted = st.form_submit_button("Submit Application Action")
+        
+    if submitted:
+        context = {
+            "intent": "track_application",
+            "application_action": action,
+            "email": email.strip(),
+            "application_status": status,
+            "target_job_url": target_job_url.strip(),
+            "follow_up_due_at": follow_up.strip(),
+            "application_notes": notes.strip()
+        }
+        if record_id.strip():
+            try:
+                context["application_record_id"] = int(record_id.strip())
+            except ValueError:
+                st.error("Record ID must be an integer.")
+                return
+        _execute_and_display_result(context)
 
+def _render_resume_analyzer() -> None:
+    st.title("Resume Analyzer")
+    st.markdown("Upload your resume text for AI-powered feedback and scoring.")
+    
+    with st.form("resume_analyzer_form"):
+        resume_text = st.text_area("Resume Text", height=200)
+        submitted = st.form_submit_button("Analyze Resume")
+        
+    if submitted:
+        context = {
+            "intent": "analyze_resume",
+            "resume_text": resume_text.strip()
+        }
+        _execute_and_display_result(context)
+
+def _render_resume_tailor() -> None:
+    st.title("Resume Tailor")
+    st.markdown("Tailor your resume to specific job descriptions.")
+    
+    with st.form("resume_tailor_form"):
+        resume_text = st.text_area("Base Resume Text", height=200)
+        col1, col2 = st.columns(2)
+        with col1:
+            target_job_url = st.text_input("Target Job URL")
+        with col2:
+            job_title = st.text_input("Job Title")
+            
+        submitted = st.form_submit_button("Tailor Resume")
+        
+    if submitted:
+        context = {
+            "intent": "tailor_resume",
+            "resume_text": resume_text.strip(),
+            "target_job_url": target_job_url.strip(),
+            "job_title": job_title.strip()
+        }
+        _execute_and_display_result(context)
+
+def _render_ats_optimizer() -> None:
+    st.title("ATS Optimizer")
+    st.markdown("Ensure your resume passes ATS keyword and formatting checks.")
+    
+    with st.form("ats_optimizer_form"):
+        resume_text = st.text_area("Resume Text", height=200)
+        job_keyword = st.text_input("Job Keywords")
+        submitted = st.form_submit_button("Optimize for ATS")
+        
+    if submitted:
+        context = {
+            "intent": "optimize_ats",
+            "resume_text": resume_text.strip(),
+            "job_keyword": job_keyword.strip()
+        }
+        _execute_and_display_result(context)
+
+def _render_interview_prep() -> None:
+    st.title("Interview Prep")
+    st.markdown("Practice technical and behavioral questions with an AI interviewer.")
+    
+    with st.form("interview_prep_form"):
+        target_roles = st.text_input("Target Roles (comma-separated)")
+        col1, col2 = st.columns(2)
+        with col1:
+            company = st.text_input("Company")
+        with col2:
+            job_title = st.text_input("Job Title")
+            
+        submitted = st.form_submit_button("Generate Interview Prep")
+        
+    if submitted:
+        roles_list = [role.strip() for role in target_roles.split(",") if role.strip()]
+        context = {
+            "intent": "prepare_interview",
+            "target_roles": roles_list,
+            "company": company.strip(),
+            "job_title": job_title.strip()
+        }
+        _execute_and_display_result(context)
+
+def _render_career_coach() -> None:
+    st.title("Career Coach")
+    st.markdown("Get personalized career advice and strategic planning.")
+    
+    with st.form("career_coach_form"):
+        resume_text = st.text_area("Resume Text", height=200)
+        target_roles = st.text_input("Target Roles (comma-separated)")
+        submitted = st.form_submit_button("Get Coaching Advice")
+        
+    if submitted:
+        roles_list = [role.strip() for role in target_roles.split(",") if role.strip()]
+        context = {
+            "intent": "career_coaching",
+            "resume_text": resume_text.strip(),
+            "target_roles": roles_list
+        }
+        _execute_and_display_result(context)
 
 def main() -> None:
     st.set_page_config(
-        page_title="JobFinder Intake",
-        page_icon="JF",
-        layout="centered",
+        page_title="JobFinder.io",
+        page_icon="🎯",
+        layout="wide",
     )
     _init_storage()
     _inject_styles()
 
-    tab_intake, tab_agents = st.tabs(["Candidate Intake", "Agent Studio"])
-    with tab_intake:
-        _render_intake_tab()
-    with tab_agents:
-        _render_agent_studio_tab()
+    st.sidebar.title("Navigation")
+    
+    pages = {
+        "🏠 Dashboard": ["Overview"],
+        "🎯 Job Search": ["Job Discovery", "Company Research", "Applications"],
+        "📄 Resume Lab": ["Resume Analyzer", "Resume Tailor", "ATS Optimizer"],
+        "🚀 Interview Center": ["Interview Prep", "Career Coach"],
+        "⚙️ Workflow Monitor": ["Agent Studio"]
+    }
+
+    section = st.sidebar.selectbox("Section", list(pages.keys()))
+    page = st.sidebar.radio("Page", pages[section])
+
+    if section == "🏠 Dashboard" and page == "Overview":
+        _render_dashboard()
+    elif section == "🎯 Job Search":
+        if page == "Job Discovery":
+            _render_job_discovery()
+        elif page == "Company Research":
+            _render_company_research()
+        elif page == "Applications":
+            _render_applications()
+    elif section == "📄 Resume Lab":
+        if page == "Resume Analyzer":
+            _render_resume_analyzer()
+        elif page == "Resume Tailor":
+            _render_resume_tailor()
+        elif page == "ATS Optimizer":
+            _render_ats_optimizer()
+    elif section == "🚀 Interview Center":
+        if page == "Interview Prep":
+            _render_interview_prep()
+        elif page == "Career Coach":
+            _render_career_coach()
+    elif section == "⚙️ Workflow Monitor" and page == "Agent Studio":
+        _render_workflow_monitor()
 
 
 if __name__ == "__main__":
