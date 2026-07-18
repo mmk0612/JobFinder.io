@@ -196,8 +196,8 @@ def _render_dashboard() -> None:
         st.error(f"Could not queue request: {exc}")
 
 
-def _handle_resume_input(form_key: str, label: str = "Resume Text") -> str:
-    resume_file = st.file_uploader(f"Upload {label} (PDF) - Optional", type=["pdf"], key=f"{form_key}_file")
+def _handle_resume_input(form_key: str, label: str = "Resume") -> str:
+    resume_file = st.file_uploader(f"Upload {label} (PDF)", type=["pdf"], key=f"{form_key}_file")
     
     if resume_file:
         try:
@@ -209,16 +209,11 @@ def _handle_resume_input(form_key: str, label: str = "Resume Text") -> str:
                 text = re.sub(r"\n{3,}", "\n\n", text)
                 pages.append(text.strip())
             doc.close()
-            extracted_text = "\n".join(pages)
-            
-            with st.expander("View/Edit Extracted Text", expanded=True):
-                final_text = st.text_area(label, value=extracted_text, height=200, key=f"{form_key}_text_filled")
-            return final_text
+            return "\n".join(pages)
         except Exception as e:
             st.error(f"Failed to read PDF: {e}")
             
-    final_text = st.text_area(f"{label} (or paste here)", height=200, key=f"{form_key}_text_empty")
-    return final_text
+    return ""
 
 def _execute_and_display_result(context: dict) -> None:
     with st.spinner("Running orchestrator..."):
@@ -474,6 +469,9 @@ def _render_resume_analyzer() -> None:
         submitted = st.form_submit_button("Analyze Resume")
         
     if submitted:
+        if not resume_text:
+            st.error("Please upload your resume PDF.")
+            return
         context = {
             "intent": "analyze_resume",
             "resume_text": resume_text.strip()
@@ -495,6 +493,9 @@ def _render_resume_tailor() -> None:
         submitted = st.form_submit_button("Tailor Resume")
         
     if submitted:
+        if not resume_text:
+            st.error("Please upload your resume PDF.")
+            return
         context = {
             "intent": "tailor_resume",
             "resume_text": resume_text.strip(),
@@ -513,6 +514,9 @@ def _render_ats_optimizer() -> None:
         submitted = st.form_submit_button("Optimize for ATS")
         
     if submitted:
+        if not resume_text:
+            st.error("Please upload your resume PDF.")
+            return
         context = {
             "intent": "optimize_ats",
             "resume_text": resume_text.strip(),
@@ -525,6 +529,7 @@ def _render_interview_prep() -> None:
     st.markdown("Practice technical and behavioral questions with an AI interviewer.")
     
     with st.form("interview_prep_form"):
+        resume_text = _handle_resume_input("interview_prep")
         target_roles = st.text_input("Target Roles (comma-separated)")
         col1, col2 = st.columns(2)
         with col1:
@@ -535,9 +540,13 @@ def _render_interview_prep() -> None:
         submitted = st.form_submit_button("Generate Interview Prep")
         
     if submitted:
+        if not resume_text:
+            st.error("Please upload your resume PDF.")
+            return
         roles_list = [role.strip() for role in target_roles.split(",") if role.strip()]
         context = {
             "intent": "prepare_interview",
+            "resume_text": resume_text,
             "target_roles": roles_list,
             "company": company.strip(),
             "job_title": job_title.strip()
@@ -554,6 +563,9 @@ def _render_career_coach() -> None:
         submitted = st.form_submit_button("Get Coaching Advice")
         
     if submitted:
+        if not resume_text:
+            st.error("Please upload your resume PDF.")
+            return
         roles_list = [role.strip() for role in target_roles.split(",") if role.strip()]
         context = {
             "intent": "career_coaching",
