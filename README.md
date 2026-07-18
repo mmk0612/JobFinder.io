@@ -10,6 +10,10 @@ This project now includes a candidate intake frontend where users can:
 
 Submissions are stored in PostgreSQL as queued requests for your scheduled backend pipeline.
 
+The Streamlit app now includes two tabs:
+- **Candidate Intake** for queued recommendation requests.
+- **Agent Studio** to run `run_orchestrator(context)` interactively with intent/plan/context inputs and inspect per-agent outputs.
+
 ### Run locally
 
 1. Install dependencies:
@@ -79,3 +83,52 @@ Optional GitHub secrets:
 - `AWS_REGION`
 - `AWS_S3_BUCKET`
 - `AWS_S3_ENDPOINT_URL`
+
+## Agent Runtime (Phase 1 Foundation)
+
+The repository now includes an initial orchestrator runtime at `src/agent_orchestrator.py`.
+
+### Included in this first slice
+
+- `OrchestratorAgent` with typed workflow state tracking (`src/agent_state.py`)
+- Base agent contract and result shape (`src/agents/base_agent.py`)
+- `ResumeAnalysisAgent` (reuses `resume_parser` + `normalizer`)
+- `JobCollectionAgent` (reuses `src/scrapers/orchestrator.py`)
+- Full agent registry (`src/agents/registry.py`) with implemented agents:
+  - `resume_analysis`
+  - `job_collection`
+  - `resume_tailoring`
+  - `ats_optimization`
+  - `company_research`
+  - `application_tracker`
+  - `interview_prep`
+  - `career_coach`
+
+### Quick usage example
+
+```python
+from src.agent_orchestrator import run_orchestrator
+
+result = run_orchestrator(
+    {
+        "intent": "bootstrap",
+        "resume_text": "...plain text extracted from resume...",
+        "keywords": "software engineer",
+        "location": "remote",
+        "max_results_per_source": 20,
+        "save_to_db": False,
+    }
+)
+```
+
+Supported intents now include:
+- `analyze_resume`
+- `discover_jobs`
+- `tailor_resume`
+- `optimize_ats`
+- `research_company`
+- `track_application`
+- `prepare_interview`
+- `career_coaching`
+- `bootstrap`
+- `full_assistant`

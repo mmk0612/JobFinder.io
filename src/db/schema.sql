@@ -182,3 +182,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_recommendation_requests_email_role
     ON job_recommendation_requests (email, requested_role);
 
 COMMIT;
+
+-- Application tracker records for agent-driven lifecycle management
+CREATE TABLE IF NOT EXISTS application_records (
+    id               BIGSERIAL PRIMARY KEY,
+    email            TEXT        NOT NULL,
+    job_url          TEXT        NOT NULL,
+    company          TEXT        NOT NULL DEFAULT '',
+    job_title        TEXT        NOT NULL DEFAULT '',
+    status           TEXT        NOT NULL DEFAULT 'saved', -- saved | applied | interviewing | offered | rejected | archived
+    applied_at       TIMESTAMPTZ,
+    follow_up_due_at TIMESTAMPTZ,
+    notes            TEXT        NOT NULL DEFAULT '',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT chk_application_records_status
+        CHECK (status IN ('saved', 'applied', 'interviewing', 'offered', 'rejected', 'archived')),
+    CONSTRAINT uq_application_records_email_job UNIQUE (email, job_url)
+);
+
+CREATE INDEX IF NOT EXISTS idx_application_records_email_status
+    ON application_records (email, status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_application_records_follow_up_due
+    ON application_records (follow_up_due_at ASC);

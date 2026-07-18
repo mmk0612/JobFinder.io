@@ -721,6 +721,149 @@ def update_recommendation_request_status(
         return cur.rowcount
 
 
+def upsert_application_record(
+    *,
+    email: str,
+    job_url: str,
+    company: str = "",
+    job_title: str = "",
+    status: str = "saved",
+    follow_up_due_at: str | None = None,
+    notes: str = "",
+) -> int:
+    normalized_email = email.strip().lower()
+    normalized_url = job_url.strip()
+    normalized_status = (status or "").strip().lower() or "saved"
+    allowed = {"saved", "applied", "interviewing", "offered", "rejected", "archived"}
+    if normalized_status not in allowed:
+        raise ValueError(f"Invalid application status {status!r}. Expected one of {sorted(allowed)}")
+    if not normalized_email:
+        raise ValueError("email cannot be empty.")
+    if not normalized_url:
+        raise ValueError("job_url cannot be empty.")
+
+    sql = """
+        INSERT INTO application_records (
+            email,
+            job_url,
+            company,
+            job_title,
+            status,
+            applied_at,
+            follow_up_due_at,
+            notes,
+            created_at,
+            updated_at
+        ) VALUES (
+            %(email)s,
+            %(job_url)s,
+            %(company)s,
+            %(job_title)s,
+            %(status)s,
+            CASE WHEN %(status)s IN ('applied', 'interviewing', 'offered', 'rejected')
+                 THEN NOW()
+                 ELSE NULL
+            END,
+            %(follow_up_due_at)s,
+            %(notes)s,
+            NOW(),
+            NOW()
+        )
+        ON CONFLICT (email, job_url) DO UPDATE SET
+            company = EXCLUDED.company,
+            job_title = EXCLUDED.job_title,
+            status = EXCLUDED.status,
+            follow_up_due_at = EXCLUDED.follow_up_due_at,
+            notes = EXCLUDED.notes,
+            updated_at = NOW()
+        RETURNING id
+    """
+    params = {
+        "email": normalized_email,
+        "job_url": normalized_url,
+        "company": company.strip(),
+        "job_title": job_title.strip(),
+        "status": normalized_status,
+        "follow_up_due_at": follow_up_due_at,
+        "notes": (notes or "")[:2000],
+    }
+    with _conn() as conn:
+        row = conn.execute(sql, params).fetchone()
+        conn.commit()
+    return int(row["id"]) if row else 0
+
+
+def update_application_record_status(
+    *,
+    record_id: int,
+    status: str,
+    notes: str = "",
+    follow_up_due_at: str | None = None,
+) -> int:
+    normalized_status = (status or "").strip().lower()
+    allowed = {"saved", "applied", "interviewing", "offered", "rejected", "archived"}
+    if normalized_status not in allowed:
+        raise ValueError(f"Invalid application status {status!r}. Expected one of {sorted(allowed)}")
+
+    sql = """
+        UPDATE application_records
+        SET status = %(status)s,
+            notes = %(notes)s,
+            follow_up_due_at = %(follow_up_due_at)s,
+            applied_at = CASE
+                WHEN %(status)s IN ('applied', 'interviewing', 'offered', 'rejected')
+                     AND applied_at IS NULL
+                THEN NOW()
+                ELSE applied_at
+            END,
+            updated_at = NOW()
+        WHERE id = %(record_id)s
+    """
+    params = {
+        "record_id": int(record_id),
+        "status": normalized_status,
+        "notes": (notes or "")[:2000],
+        "follow_up_due_at": follow_up_due_at,
+    }
+    with _conn() as conn:
+        cur = conn.execute(sql, params)
+        conn.commit()
+        return cur.rowcount
+
+
+def list_application_records(
+    *,
+    email: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    conditions = []
+    params: dict[str, object] = {"limit": max(1, int(limit))}
+    if email:
+        conditions.append("email = %(email)s")
+        params["email"] = email.strip().lower()
+    if status:
+        normalized_status = status.strip().lower()
+        allowed = {"saved", "applied", "interviewing", "offered", "rejected", "archived"}
+        if normalized_status not in allowed:
+            raise ValueError(
+                f"Invalid application status filter {status!r}. Expected one of {sorted(allowed)}"
+            )
+        conditions.append("status = %(status)s")
+        params["status"] = normalized_status
+
+    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    sql = f"""
+        SELECT *
+        FROM application_records
+        {where_clause}
+        ORDER BY updated_at DESC, id DESC
+        LIMIT %(limit)s
+    """
+    with _conn() as conn:
+        return conn.execute(sql, params).fetchall()
+
+
 # ── read operations ───────────────────────────────────────────────────────────
 
 def get_jobs(
