@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 
+import fitz
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -194,6 +195,30 @@ def _render_dashboard() -> None:
     except Exception as exc:
         st.error(f"Could not queue request: {exc}")
 
+
+def _handle_resume_input(form_key: str, label: str = "Resume Text") -> str:
+    resume_file = st.file_uploader(f"Upload {label} (PDF) - Optional", type=["pdf"], key=f"{form_key}_file")
+    
+    if resume_file:
+        try:
+            doc = fitz.open(stream=resume_file.getvalue(), filetype="pdf")
+            pages = []
+            for page in doc:
+                text = page.get_text("text")
+                text = re.sub(r"[ \t]+", " ", text)
+                text = re.sub(r"\n{3,}", "\n\n", text)
+                pages.append(text.strip())
+            doc.close()
+            extracted_text = "\n".join(pages)
+            
+            with st.expander("View/Edit Extracted Text", expanded=True):
+                final_text = st.text_area(label, value=extracted_text, height=200, key=f"{form_key}_text_filled")
+            return final_text
+        except Exception as e:
+            st.error(f"Failed to read PDF: {e}")
+            
+    final_text = st.text_area(f"{label} (or paste here)", height=200, key=f"{form_key}_text_empty")
+    return final_text
 
 def _execute_and_display_result(context: dict) -> None:
     with st.spinner("Running orchestrator..."):
@@ -445,7 +470,7 @@ def _render_resume_analyzer() -> None:
     st.markdown("Upload your resume text for AI-powered feedback and scoring.")
     
     with st.form("resume_analyzer_form"):
-        resume_text = st.text_area("Resume Text", height=200)
+        resume_text = _handle_resume_input("resume_analyzer")
         submitted = st.form_submit_button("Analyze Resume")
         
     if submitted:
@@ -460,7 +485,7 @@ def _render_resume_tailor() -> None:
     st.markdown("Tailor your resume to specific job descriptions.")
     
     with st.form("resume_tailor_form"):
-        resume_text = st.text_area("Base Resume Text", height=200)
+        resume_text = _handle_resume_input("resume_tailor", label="Base Resume Text")
         col1, col2 = st.columns(2)
         with col1:
             target_job_url = st.text_input("Target Job URL")
@@ -483,7 +508,7 @@ def _render_ats_optimizer() -> None:
     st.markdown("Ensure your resume passes ATS keyword and formatting checks.")
     
     with st.form("ats_optimizer_form"):
-        resume_text = st.text_area("Resume Text", height=200)
+        resume_text = _handle_resume_input("ats_optimizer")
         job_keyword = st.text_input("Job Keywords")
         submitted = st.form_submit_button("Optimize for ATS")
         
@@ -524,7 +549,7 @@ def _render_career_coach() -> None:
     st.markdown("Get personalized career advice and strategic planning.")
     
     with st.form("career_coach_form"):
-        resume_text = st.text_area("Resume Text", height=200)
+        resume_text = _handle_resume_input("career_coach")
         target_roles = st.text_input("Target Roles (comma-separated)")
         submitted = st.form_submit_button("Get Coaching Advice")
         

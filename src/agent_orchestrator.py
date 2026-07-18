@@ -83,32 +83,41 @@ class OrchestratorAgent:
         if isinstance(explicit, list):
             return [str(step).strip() for step in explicit if str(step).strip()]
 
-        if intent == "analyze_resume":
-            return ["resume_analysis"]
-        if intent == "discover_jobs":
-            return ["job_collection"]
-        if intent == "tailor_resume":
-            return ["resume_tailoring"]
-        if intent == "optimize_ats":
-            return ["ats_optimization"]
-        if intent == "research_company":
-            return ["company_research"]
-        if intent == "track_application":
-            return ["application_tracker"]
-        if intent == "prepare_interview":
-            return ["interview_prep"]
-        if intent == "career_coaching":
-            return ["career_coach"]
-        if intent == "bootstrap":
-            return ["resume_analysis", "job_collection"]
-        if intent == "full_assistant":
-            return list(ALL_AGENT_NAMES)
-
         plan: list[str] = []
-        if "structured_resume" in context or "resume_text" in context:
-            plan.append("resume_analysis")
-        if "keywords" in context or "target_roles" in context:
-            plan.append("job_collection")
+
+        if intent == "analyze_resume":
+            plan = ["resume_analysis"]
+        elif intent == "discover_jobs":
+            plan = ["job_collection"]
+        elif intent == "tailor_resume":
+            plan = ["resume_tailoring"]
+        elif intent == "optimize_ats":
+            plan = ["ats_optimization"]
+        elif intent == "research_company":
+            plan = ["company_research"]
+        elif intent == "track_application":
+            plan = ["application_tracker"]
+        elif intent == "prepare_interview":
+            plan = ["interview_prep"]
+        elif intent == "career_coaching":
+            plan = ["career_coach"]
+        elif intent == "bootstrap":
+            plan = ["resume_analysis", "job_collection"]
+        elif intent == "full_assistant":
+            plan = list(ALL_AGENT_NAMES)
+        else:
+            if "structured_resume" in context or "resume_text" in context:
+                plan.append("resume_analysis")
+            if "keywords" in context or "target_roles" in context:
+                plan.append("job_collection")
+                
+        # Inject resume_analysis as a prerequisite if we have text but no structure
+        needs_resume = ["resume_tailoring", "ats_optimization", "career_coach", "interview_prep"]
+        if any(agent in plan for agent in needs_resume):
+            if "structured_resume" not in context and "resume_text" in context:
+                if "resume_analysis" not in plan:
+                    plan.insert(0, "resume_analysis")
+
         return plan
 
     def available_agents(self) -> list[str]:
