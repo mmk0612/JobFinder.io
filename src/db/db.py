@@ -124,7 +124,14 @@ def _get_pool() -> ConnectionPool:
             dsn,
             min_size=1,
             max_size=5,
-            kwargs={"row_factory": dict_row},
+            kwargs={
+                "row_factory": dict_row,
+                "keepalives": 1,
+                "keepalives_idle": 30,
+                "keepalives_interval": 10,
+                "keepalives_count": 5,
+            },
+            check=ConnectionPool.check_connection,
         )
     return _pool
 
