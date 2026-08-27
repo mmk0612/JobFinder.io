@@ -226,39 +226,34 @@ def handle_job_matching(payload: dict[str, Any]) -> None:
     )
 
     try:
-        # Call match.py pipeline logic directly
-        import subprocess
-        # Create temp folder for matching artifacts
+        from src.embedder import generate_embeddings
+        from src.matcher import match_resume_to_jobs
+
+        structured_resume = payload.get("structured_resume") or {}
+        embeddings = generate_embeddings(structured_resume)
+        
+        # Save structured resume & embeddings for notification step
         out_dir = Path("output/requests") / f"request_{request_id}"
         out_dir.mkdir(parents=True, exist_ok=True)
-        
         resume_json = out_dir / "structured_resume.json"
-        resume_json.write_text(json.dumps(payload.get("structured_resume") or {}), encoding="utf-8")
-
-        # Generate resume embeddings
-        python_bin = sys.executable
-        subprocess.run(
-            [python_bin, "main.py", "--resume", str(resume_json), "--output", str(resume_json)],
-            check=True,
+        resume_json.write_text(json.dumps(structured_resume), encoding="utf-8")
+        
+        emb_path = resume_json.with_suffix(".embeddings.npz")
+        import numpy as np
+        np.savez(
+            emb_path,
+            skills_embedding=embeddings["skills_embedding"],
+            profile_embedding=embeddings["profile_embedding"],
         )
 
-        # Match jobs
-        subprocess.run(
-            [
-                python_bin,
-                "match.py",
-                "--resume-json",
-                str(resume_json),
-                "--resume-embeddings",
-                str(resume_json.with_suffix(".embeddings.npz")),
-                "--job-keyword",
-                role,
-                "--json",
-            ],
-            check=True,
+        match_results = match_resume_to_jobs(
+            structured_resume=structured_resume,
+            embeddings=embeddings,
+            job_keyword=role,
         )
 
-        publish_json("recommendation-requested", payload, key=str(request_id))
+        logger.info(f"[%s] Matching completed successfully", request_id)
+        publish_json(TOPIC_RECOMMENDATION_REQUESTED, payload, key=str(request_id))
 
     except Exception as exc:
         logger.error(f"[%s] Matching failed: %s", request_id, exc)
