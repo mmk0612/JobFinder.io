@@ -20,7 +20,7 @@ import requests
 # ── configuration ────────────────────────────────────────────────────────────
 
 _DEFAULT_BASE_URL = os.environ.get("LLM_BASE_URL", "https://integrate.api.nvidia.com/v1").strip() or "https://integrate.api.nvidia.com/v1"
-_DEFAULT_MODEL = os.environ.get("LLM_MODEL", "meta/llama-3.1-8b-instruct").strip() or "meta/llama-3.1-8b-instruct"
+_DEFAULT_MODEL = os.environ.get("LLM_MODEL", "nvidia/llama-3.1-nemotron-70b-instruct").strip() or "nvidia/llama-3.1-nemotron-70b-instruct"
 _MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "5") or "5")
 _RETRY_DELAY = float(os.environ.get("LLM_RETRY_DELAY_SECONDS", "1.5") or "1.5")
 _RATE_LIMIT_RETRY_DELAY = float(os.environ.get("LLM_RATE_LIMIT_RETRY_DELAY_SECONDS", "3.0") or "3.0")
