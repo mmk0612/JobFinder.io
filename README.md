@@ -1,18 +1,21 @@
 # JobFinder.io
 
-## Frontend Intake (Streamlit)
+## Frontend Intake (FastAPI)
 
-This project now includes a candidate intake frontend where users can:
+This project now includes a FastAPI service where users can:
 
 - select up to 5 target roles from a fixed list,
 - upload their latest resume (PDF),
 - provide an email ID for recommendations.
 
 Submissions are stored in PostgreSQL as queued requests for your scheduled backend pipeline.
+When Kafka is configured, the queue also publishes wake-up events so the worker can drain work without tight polling loops.
 
-The Streamlit app now includes two tabs:
-- **Candidate Intake** for queued recommendation requests.
-- **Agent Studio** to run `run_orchestrator(context)` interactively with intent/plan/context inputs and inspect per-agent outputs.
+The FastAPI app exposes:
+- a landing page with a candidate intake form,
+- a JSON orchestrator endpoint,
+- a lightweight orchestrator studio form,
+- resume-analysis and agent discovery endpoints.
 
 ### Run locally
 
@@ -24,8 +27,12 @@ The Streamlit app now includes two tabs:
    - `AWS_ACCESS_KEY_ID` must be set
    - `AWS_SECRET_ACCESS_KEY` must be set
    - `AWS_S3_BUCKET` defaults to `job-finder-resume-s3-bucket` (override if needed)
-3. Start the frontend:
-   - `streamlit run frontend_app.py`
+3. Start the API service:
+   - `uvicorn frontend_app:app --reload`
+
+### Deployment
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for Docker and production deployment steps.
 
 ### Data capture details
 
@@ -51,9 +58,9 @@ The Streamlit app now includes two tabs:
 5. Optional for non-AWS S3-compatible endpoints:
    - `AWS_S3_ENDPOINT_URL`
 
-### Daily workflow (DB-driven)
+### Daily workflow (DB + Kafka)
 
-The GitHub Action now processes queued rows from `job_recommendation_requests`.
+The GitHub Action processes queued rows from `job_recommendation_requests` and can use Kafka as the dispatch bus for job-processing wake-ups.
 Each queued request uses:
 
 - `email` for notification destination,
@@ -63,6 +70,9 @@ Each queued request uses:
 For each request, the workflow marks status progression in DB:
 
 - `queued` -> `processing` -> `done` (or `failed` with error note).
+
+Kafka is optional and driven by `KAFKA_BOOTSTRAP_SERVERS`.
+When set, the job-processing worker publishes and consumes wake-up events on `job-processing.requested` while PostgreSQL remains the durable state store.
 
 Required GitHub secrets for request processing:
 
@@ -83,52 +93,24 @@ Optional GitHub secrets:
 - `AWS_REGION`
 - `AWS_S3_BUCKET`
 - `AWS_S3_ENDPOINT_URL`
+- `KAFKA_BOOTSTRAP_SERVERS`
+- `KAFKA_SECURITY_PROTOCOL`
+- `KAFKA_CLIENT_ID`
 
-## Agent Runtime (Phase 1 Foundation)
+## Microservice Runtime
 
-The repository now includes an initial orchestrator runtime at `src/agent_orchestrator.py`.
+The app now exposes direct service endpoints instead of an agent/orchestrator layer.
 
-### Included in this first slice
+Available services include:
 
-- `OrchestratorAgent` with typed workflow state tracking (`src/agent_state.py`)
-- Base agent contract and result shape (`src/agents/base_agent.py`)
-- `ResumeAnalysisAgent` (reuses `resume_parser` + `normalizer`)
-- `JobCollectionAgent` (reuses `src/scrapers/orchestrator.py`)
-- Full agent registry (`src/agents/registry.py`) with implemented agents:
-  - `resume_analysis`
-  - `job_collection`
-  - `resume_tailoring`
-  - `ats_optimization`
-  - `company_research`
-  - `application_tracker`
-  - `interview_prep`
-  - `career_coach`
+- `resume_analysis`
+- `job_discovery`
+- `company_research`
+- `application_tracker`
+- `resume_tailoring`
+- `ats_optimization`
+- `interview_prep`
+- `career_coach`
+- `recommendation_plan`
 
-### Quick usage example
-
-```python
-from src.agent_orchestrator import run_orchestrator
-
-result = run_orchestrator(
-    {
-        "intent": "bootstrap",
-        "resume_text": "...plain text extracted from resume...",
-        "keywords": "software engineer",
-        "location": "remote",
-        "max_results_per_source": 20,
-        "save_to_db": False,
-    }
-)
-```
-
-Supported intents now include:
-- `analyze_resume`
-- `discover_jobs`
-- `tailor_resume`
-- `optimize_ats`
-- `research_company`
-- `track_application`
-- `prepare_interview`
-- `career_coaching`
-- `bootstrap`
-- `full_assistant`
+Service calls are implemented in [src/services/jobfinder_services.py](src/services/jobfinder_services.py) and exposed through FastAPI in [frontend_app.py](frontend_app.py).

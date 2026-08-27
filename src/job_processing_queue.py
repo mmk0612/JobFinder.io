@@ -27,6 +27,7 @@ from src.db.db import (
     requeue_processing_jobs_for_worker,
     requeue_stale_processing_jobs,
 )
+from src.messaging.kafka_bus import kafka_enabled, publish_json
 from src.job_processor import process_job_listings
 from src.scrapers.models import JobListing
 
@@ -57,6 +58,15 @@ QUEUE_STALE_LOCK_SECONDS = max(
     10,
     int(os.environ.get("JOB_PROCESSING_STALE_LOCK_SECONDS", "900") or "900"),
 )
+QUEUE_TRANSPORT = (
+    os.environ.get("JOB_PROCESSING_TRANSPORT", "").strip().lower() or ("kafka" if kafka_enabled() else "db")
+)
+QUEUE_KAFKA_TOPIC = os.environ.get("JOB_PROCESSING_KAFKA_TOPIC", "job-processing.requested").strip() or "job-processing.requested"
+
+
+def _kafka_bootstrap_servers() -> list[str]:
+    raw = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "")
+    return [value.strip() for value in raw.split(",") if value.strip()]
 
 
 @dataclass(frozen=True)
@@ -86,6 +96,21 @@ def enqueue_job_processing(jobs: list[JobListing]) -> int:
 
     urls = [job.url for job in jobs if job.url]
     enqueued = enqueue_jobs_for_processing(urls, max_attempts=QUEUE_MAX_ATTEMPTS)
+    if QUEUE_TRANSPORT in {"kafka", "hybrid"}:
+        try:
+            publish_json(
+                QUEUE_KAFKA_TOPIC,
+                {
+                    "event_type": "job_processing_requested",
+                    "job_urls": urls,
+                    "queued_count": enqueued,
+                    "transport": QUEUE_TRANSPORT,
+                    "created_at": time.time(),
+                },
+                key="job-processing",
+            )
+        except Exception as exc:
+            logger.warning("Failed to publish job-processing wake-up event: %s", exc)
     autostart_worker = os.environ.get("JOB_PROCESSING_AUTOSTART_WORKER", "true").strip().lower() in {
         "1",
         "true",
@@ -212,79 +237,112 @@ def _ensure_worker_started() -> None:
         _worker_thread.start()
 
 
-def _worker_loop() -> None:
-    while not _stop_event.is_set():
-        requeue_stale_processing_jobs(stale_seconds=QUEUE_STALE_LOCK_SECONDS)
-        claimed = dequeue_jobs_for_processing(worker_id=_worker_id, limit=QUEUE_CLAIM_LIMIT)
-        if not claimed:
-            time.sleep(QUEUE_POLL_INTERVAL_SECONDS)
+def _drain_due_jobs_once() -> None:
+    requeue_stale_processing_jobs(stale_seconds=QUEUE_STALE_LOCK_SECONDS)
+    claimed = dequeue_jobs_for_processing(worker_id=_worker_id, limit=QUEUE_CLAIM_LIMIT)
+    if not claimed:
+        return
+
+    jobs_to_process: list[JobListing] = []
+    queue_id_by_url: dict[str, int] = {}
+
+    for item in claimed:
+        queue_id = int(item["id"])
+        url = item["job_url"]
+        row = get_job_by_url(url)
+        if not row:
+            mark_job_processing_failed(
+                queue_id,
+                error_message=f"Job not found for URL: {url}",
+                retry_delay_seconds=QUEUE_RETRY_DELAY_SECONDS,
+            )
             continue
 
-        jobs_to_process: list[JobListing] = []
-        queue_id_by_url: dict[str, int] = {}
+        queue_id_by_url[url] = queue_id
+        jobs_to_process.append(
+            JobListing(
+                job_title=row["job_title"],
+                company=row["company"],
+                url=row["url"],
+                source=row["source"],
+                location=row.get("location") or "",
+                description=row.get("description") or "",
+                salary=row.get("salary") or "",
+                experience_required=row.get("experience_required") or "",
+            )
+        )
 
-        for item in claimed:
-            queue_id = int(item["id"])
-            url = item["job_url"]
-            row = get_job_by_url(url)
-            if not row:
+    if not jobs_to_process:
+        return
+
+    try:
+        result = process_job_listings(jobs_to_process, rebuild_index=False)
+        errors = result.get("errors", {})
+
+        for job in jobs_to_process:
+            queue_id = queue_id_by_url.get(job.url)
+            if queue_id is None:
+                continue
+            if job.url in errors:
                 mark_job_processing_failed(
                     queue_id,
-                    error_message=f"Job not found for URL: {url}",
+                    error_message=str(errors[job.url]),
                     retry_delay_seconds=QUEUE_RETRY_DELAY_SECONDS,
                 )
-                continue
+            else:
+                mark_job_processing_done(queue_id)
 
-            queue_id_by_url[url] = queue_id
-            jobs_to_process.append(
-                JobListing(
-                    job_title=row["job_title"],
-                    company=row["company"],
-                    url=row["url"],
-                    source=row["source"],
-                    location=row.get("location") or "",
-                    description=row.get("description") or "",
-                    salary=row.get("salary") or "",
-                    experience_required=row.get("experience_required") or "",
-                )
+        logger.info(
+            "Durable queue batch complete: processed=%s errors=%s",
+            result.get("processed", 0),
+            len(errors),
+        )
+    except Exception as exc:
+        logger.error("Durable queue worker failed for claimed batch: %s", exc)
+        for job in jobs_to_process:
+            queue_id = queue_id_by_url.get(job.url)
+            if queue_id is None:
+                continue
+            mark_job_processing_failed(
+                queue_id,
+                error_message=str(exc),
+                retry_delay_seconds=QUEUE_RETRY_DELAY_SECONDS,
             )
 
-        if not jobs_to_process:
-            continue
 
+def _worker_loop() -> None:
+    kafka_consumer = None
+    if QUEUE_TRANSPORT in {"kafka", "hybrid"} and kafka_enabled():
         try:
-            result = process_job_listings(jobs_to_process, rebuild_index=False)
-            errors = result.get("errors", {})
+            from kafka import KafkaConsumer
 
-            for job in jobs_to_process:
-                queue_id = queue_id_by_url.get(job.url)
-                if queue_id is None:
-                    continue
-                if job.url in errors:
-                    mark_job_processing_failed(
-                        queue_id,
-                        error_message=str(errors[job.url]),
-                        retry_delay_seconds=QUEUE_RETRY_DELAY_SECONDS,
-                    )
-                else:
-                    mark_job_processing_done(queue_id)
-
-            logger.info(
-                "Durable queue batch complete: processed=%s errors=%s",
-                result.get("processed", 0),
-                len(errors),
+            kafka_consumer = KafkaConsumer(
+                QUEUE_KAFKA_TOPIC,
+                bootstrap_servers=_kafka_bootstrap_servers(),
+                client_id=os.environ.get("KAFKA_CLIENT_ID", "jobfinder").strip() or "jobfinder",
+                group_id=os.environ.get("JOB_PROCESSING_KAFKA_GROUP_ID", "jobfinder-job-processing").strip() or "jobfinder-job-processing",
+                security_protocol=os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT").strip() or "PLAINTEXT",
+                enable_auto_commit=False,
+                auto_offset_reset="earliest",
+                consumer_timeout_ms=1000,
             )
         except Exception as exc:
-            logger.error("Durable queue worker failed for claimed batch: %s", exc)
-            for job in jobs_to_process:
-                queue_id = queue_id_by_url.get(job.url)
-                if queue_id is None:
+            logger.warning("Kafka consumer unavailable, falling back to DB polling: %s", exc)
+            kafka_consumer = None
+
+    while not _stop_event.is_set():
+        if kafka_consumer is not None:
+            try:
+                batch = kafka_consumer.poll(timeout_ms=QUEUE_POLL_INTERVAL_SECONDS * 1000, max_records=10)
+                if batch:
+                    _drain_due_jobs_once()
+                    kafka_consumer.commit()
                     continue
-                mark_job_processing_failed(
-                    queue_id,
-                    error_message=str(exc),
-                    retry_delay_seconds=QUEUE_RETRY_DELAY_SECONDS,
-                )
+            except Exception as exc:
+                logger.warning("Kafka queue poll failed, falling back to DB drain: %s", exc)
+
+        _drain_due_jobs_once()
+        time.sleep(QUEUE_POLL_INTERVAL_SECONDS)
 
 
 atexit.register(stop_worker)

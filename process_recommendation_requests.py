@@ -18,6 +18,7 @@ import re
 import subprocess
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -155,6 +156,75 @@ def _run_queue_drain() -> None:
     print(f"Job index rebuilt with {indexed} vector(s)")
 
 
+def _process_role_request(
+    *,
+    python_bin: Path,
+    request_output_dir: Path,
+    role: str,
+    email: str,
+    location: str,
+    max_per_source: int,
+    resume_json_path: Path,
+    resume_embeddings_path: Path,
+) -> None:
+    role_slug = _slugify(role)
+    print(f"Processing role={role}")
+
+    scrape_env = os.environ.copy()
+    scrape_env["JOB_PROCESSING_BACKGROUND"] = "true"
+    scrape_env["JOB_PROCESSING_AUTOSTART_WORKER"] = "false"
+    scrape_env["JOB_PROCESSING_TRANSPORT"] = "kafka"
+    _run_command(
+        [
+            str(python_bin),
+            "scrape.py",
+            "--keywords",
+            role,
+            "--location",
+            location,
+            "--max",
+            str(max_per_source),
+        ],
+        env=scrape_env,
+    )
+
+    _run_queue_drain()
+
+    _run_command(
+        [
+            str(python_bin),
+            "match.py",
+            "--resume-json",
+            str(resume_json_path),
+            "--resume-embeddings",
+            str(resume_embeddings_path),
+            "--job-keyword",
+            role,
+            "--json",
+        ],
+        stdout_path=request_output_dir / f"latest_match_output_{role_slug}.json",
+    )
+
+    notify_env = os.environ.copy()
+    notify_env["NOTIFY_EMAIL_TO"] = email
+    _run_command(
+        [
+            str(python_bin),
+            "notify.py",
+            "--once",
+            "--resume-json",
+            str(resume_json_path),
+            "--resume-embeddings",
+            str(resume_embeddings_path),
+            "--job-keyword",
+            role,
+            "--json",
+        ],
+        env=notify_env,
+        stdout_path=request_output_dir / f"latest_notify_output_{role_slug}.json",
+    )
+
+
 def _roles_from_row(raw_roles: object, raw_role: object | None = None) -> list[str]:
     roles: list[str] = []
 
@@ -244,6 +314,7 @@ def process_requests() -> int:
 
     done_count = 0
     failed_count = 0
+    role_concurrency = max(1, int(os.environ.get("RECOMMENDATION_ROLE_CONCURRENCY", "2") or "2"))
 
     for row in requests:
         request_id = int(row["id"])
@@ -287,62 +358,36 @@ def process_requests() -> int:
 
                 resume_embeddings_path = resume_json_path.with_suffix(".embeddings.npz")
 
-                for role in roles:
-                    role_slug = _slugify(role)
-                    print(f"Processing role={role}")
-
-                    scrape_env = os.environ.copy()
-                    scrape_env["JOB_PROCESSING_BACKGROUND"] = "true"
-                    scrape_env["JOB_PROCESSING_AUTOSTART_WORKER"] = "false"
-                    _run_command(
-                        [
-                            str(python_bin),
-                            "scrape.py",
-                            "--keywords",
-                            role,
-                            "--location",
-                            location,
-                            "--max",
-                            str(max_per_source),
-                        ],
-                        env=scrape_env,
-                    )
-
-                    _run_queue_drain()
-
-                    _run_command(
-                        [
-                            str(python_bin),
-                            "match.py",
-                            "--resume-json",
-                            str(resume_json_path),
-                            "--resume-embeddings",
-                            str(resume_embeddings_path),
-                            "--job-keyword",
-                            role,
-                            "--json",
-                        ],
-                        stdout_path=request_output_dir / f"latest_match_output_{role_slug}.json",
-                    )
-
-                    notify_env = os.environ.copy()
-                    notify_env["NOTIFY_EMAIL_TO"] = email
-                    _run_command(
-                        [
-                            str(python_bin),
-                            "notify.py",
-                            "--once",
-                            "--resume-json",
-                            str(resume_json_path),
-                            "--resume-embeddings",
-                            str(resume_embeddings_path),
-                            "--job-keyword",
-                            role,
-                            "--json",
-                        ],
-                        env=notify_env,
-                        stdout_path=request_output_dir / f"latest_notify_output_{role_slug}.json",
-                    )
+                if len(roles) == 1 or role_concurrency == 1:
+                    for role in roles:
+                        _process_role_request(
+                            python_bin=python_bin,
+                            request_output_dir=request_output_dir,
+                            role=role,
+                            email=email,
+                            location=location,
+                            max_per_source=max_per_source,
+                            resume_json_path=resume_json_path,
+                            resume_embeddings_path=resume_embeddings_path,
+                        )
+                else:
+                    with ThreadPoolExecutor(max_workers=min(role_concurrency, len(roles))) as executor:
+                        futures = {
+                            executor.submit(
+                                _process_role_request,
+                                python_bin=python_bin,
+                                request_output_dir=request_output_dir,
+                                role=role,
+                                email=email,
+                                location=location,
+                                max_per_source=max_per_source,
+                                resume_json_path=resume_json_path,
+                                resume_embeddings_path=resume_embeddings_path,
+                            ): role
+                            for role in roles
+                        }
+                        for future in as_completed(futures):
+                            future.result()
 
             done_count += 1
             update_recommendation_request_status(

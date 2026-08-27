@@ -1,18 +1,32 @@
 from __future__ import annotations
 
+import html
 import json
 import re
 
 import fitz
-import streamlit as st
+import uvicorn
 from dotenv import load_dotenv
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from src.db.db import apply_schema, create_job_recommendation_request
-from src.agent_orchestrator import run_orchestrator
-from src.agents.registry import ALL_AGENT_NAMES
+from src.services.jobfinder_services import (
+    analyze_resume_service,
+    application_tracker_service,
+    ats_optimization_service,
+    career_coach_service,
+    discover_jobs_service,
+    recommend_service_plan,
+    research_company_service,
+    tailor_resume_service,
+    interview_prep_service,
+)
 from src.storage.s3_storage import upload_resume_bytes
 
 load_dotenv()
+
+app = FastAPI(title="JobFinder.io", version="3.0.0")
 
 ROLE_OPTIONS = [
     "AI Engineer",
@@ -29,12 +43,23 @@ ROLE_OPTIONS = [
     "Security Engineer",
 ]
 
+SERVICE_NAMES = [
+    "resume_analysis",
+    "job_discovery",
+    "company_research",
+    "application_tracker",
+    "resume_tailoring",
+    "ats_optimization",
+    "interview_prep",
+    "career_coach",
+    "recommendation_plan",
+]
+
 EMAIL_PATTERN = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
 
-@st.cache_resource
-def _init_storage() -> None:
-    """Ensure DB tables are available for intake requests."""
+@app.on_event("startup")
+def _startup() -> None:
     apply_schema()
 
 
@@ -42,583 +67,518 @@ def _is_valid_email(email: str) -> bool:
     return bool(EMAIL_PATTERN.match(email.strip()))
 
 
-def _parse_json_object(raw: str) -> dict | None:
+def _parse_json_object(raw: str) -> dict:
     text = (raw or "").strip()
     if not text:
-        return None
+        return {}
     parsed = json.loads(text)
     if not isinstance(parsed, dict):
         raise ValueError("JSON must be an object (dictionary).")
     return parsed
 
 
-def _inject_styles() -> None:
-    st.markdown(
-        """
-        <style>
-          @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
-
-          :root {
-            --bg-1: #0f172a;
-            --bg-2: #1e293b;
-            --card: rgba(255, 255, 255, 0.09);
-            --text: #e2e8f0;
-            --muted: #94a3b8;
-            --accent: #22d3ee;
-            --accent-2: #fb7185;
-          }
-
-          [data-testid='stAppViewContainer'] {
-            background:
-              radial-gradient(1200px 500px at 8% -10%, rgba(34,211,238,0.22), transparent 70%),
-              radial-gradient(1000px 450px at 95% -5%, rgba(251,113,133,0.18), transparent 65%),
-              linear-gradient(135deg, var(--bg-1), var(--bg-2));
-          }
-
-          .main .block-container {
-            padding-top: 2.2rem;
-            max-width: 900px;
-          }
-
-          h1, h2, h3 {
-            font-family: 'Space Grotesk', sans-serif;
-            color: var(--text);
-            letter-spacing: 0.3px;
-          }
-
-          p, div, label, span {
-            font-family: 'IBM Plex Mono', monospace;
-            color: var(--text);
-          }
-
-          .intake-shell {
-            background: var(--card);
-            border: 1px solid rgba(226, 232, 240, 0.15);
-            border-radius: 20px;
-            padding: 1.1rem 1rem 1.2rem 1rem;
-            backdrop-filter: blur(4px);
-            animation: rise 500ms ease-out;
-          }
-
-          @keyframes rise {
-            from { transform: translateY(12px); opacity: 0; }
-            to { transform: translateY(0); opacity: 1; }
-          }
-
-          .caption-strip {
-            color: var(--muted);
-            border-left: 3px solid var(--accent);
-            padding-left: 0.75rem;
-            margin-bottom: 1rem;
-          }
-
-          .stButton>button {
-            font-family: 'Space Grotesk', sans-serif;
-            border-radius: 999px;
-            border: 1px solid rgba(226,232,240,0.3);
-            background: linear-gradient(90deg, var(--accent), var(--accent-2));
-            color: #020617;
-            font-weight: 700;
-            transition: transform 120ms ease;
-          }
-
-          .stButton>button:hover {
-            transform: translateY(-1px);
-          }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+def _extract_pdf_text_bytes(pdf_bytes: bytes) -> str:
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        pages: list[str] = []
+        for page in doc:
+            text = page.get_text("text")
+            text = re.sub(r"[ \t]+", " ", text)
+            text = re.sub(r"\n{3,}", "\n\n", text)
+            pages.append(text.strip())
+        return "\n".join(page for page in pages if page)
+    finally:
+        doc.close()
 
 
-def _render_dashboard() -> None:
-    st.title("JobFinder Candidate Intake")
-    st.markdown(
-        "<p class='caption-strip'>Select your target role, upload your latest resume, and we will queue your request for the scheduled recommendation pipeline.</p>",
-        unsafe_allow_html=True,
-    )
+def _pretty(payload: dict) -> str:
+    return html.escape(json.dumps(payload, indent=2, ensure_ascii=False))
 
-    with st.container(border=False):
-        st.markdown("<div class='intake-shell'>", unsafe_allow_html=True)
 
-        with st.form("candidate_intake_form", clear_on_submit=True):
-            email = st.text_input("Email ID", placeholder="name@example.com")
-            role = st.selectbox(
-                "Target role for recommendations",
-                options=ROLE_OPTIONS,
-                help="Select the role you want recommendations for.",
-            )
-            resume = st.file_uploader(
-                "Latest resume (PDF)",
-                type=["pdf"],
-                accept_multiple_files=False,
-            )
-            submitted = st.form_submit_button("Queue recommendation request")
+def _page_shell(title: str, body: str) -> str:
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{html.escape(title)}</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+    :root {{
+      --bg-1: #07111f;
+      --bg-2: #112036;
+      --card: rgba(255, 255, 255, 0.08);
+      --card-strong: rgba(255, 255, 255, 0.12);
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #22d3ee;
+      --accent-2: #fb7185;
+      --border: rgba(226, 232, 240, 0.16);
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 500px at 8% -10%, rgba(34,211,238,0.22), transparent 70%),
+        radial-gradient(1000px 450px at 95% -5%, rgba(251,113,133,0.18), transparent 65%),
+        linear-gradient(135deg, var(--bg-1), var(--bg-2));
+      font-family: 'IBM Plex Mono', monospace;
+    }}
+    .container {{ max-width: 1180px; margin: 0 auto; padding: 32px 20px 56px; }}
+    .hero {{ margin-bottom: 20px; }}
+    h1,h2,h3 {{ font-family: 'Space Grotesk', sans-serif; margin: 0 0 10px; }}
+    h1 {{ font-size: clamp(2rem, 5vw, 3.4rem); }}
+    h2 {{ font-size: 1.2rem; }}
+    p {{ color: var(--muted); line-height: 1.6; margin-top: 0; }}
+    .grid {{ display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }}
+    .card {{
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 18px;
+      backdrop-filter: blur(6px);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.16);
+    }}
+    .card strong {{ color: #fff; }}
+    label {{ display: block; margin: 0 0 8px; color: #fff; font-size: 0.9rem; }}
+    input, select, textarea {{
+      width: 100%;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.55);
+      color: var(--text);
+      padding: 12px 14px;
+      font: inherit;
+    }}
+    textarea {{ min-height: 160px; resize: vertical; }}
+    .field {{ margin-bottom: 14px; }}
+    .button {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border: 0;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      color: #020617;
+      font: 700 0.95rem 'Space Grotesk', sans-serif;
+      padding: 12px 18px;
+      cursor: pointer;
+      text-decoration: none;
+    }}
+    .status {{
+      border-radius: 16px;
+      padding: 14px 16px;
+      margin: 18px 0;
+      border: 1px solid var(--border);
+      background: var(--card-strong);
+    }}
+    .status.ok {{ border-color: rgba(34,211,238,0.35); }}
+    .status.error {{ border-color: rgba(251,113,133,0.45); }}
+    pre {{
+      white-space: pre-wrap;
+      overflow-x: auto;
+      margin: 0;
+      padding: 12px;
+      border-radius: 14px;
+      background: rgba(2, 6, 23, 0.55);
+      color: #dbeafe;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }}
+    .links {{ display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }}
+    .pill {{ padding: 8px 12px; border-radius: 999px; background: rgba(255,255,255,0.08); color: var(--text); text-decoration: none; }}
+    code {{ color: #7dd3fc; }}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="hero">
+      <h1>JobFinder.io</h1>
+      <p>FastAPI front end, service-oriented backend, Kafka for async dispatch, PostgreSQL for state, and S3 for resumes/artifacts.</p>
+      <div class="links">
+        <a class="pill" href="/healthz">Health</a>
+        <a class="pill" href="/api/services">Services</a>
+        <a class="pill" href="/docs">API Docs</a>
+      </div>
+    </div>
+    {body}
+  </div>
+</body>
+</html>"""
 
-        st.markdown("</div>", unsafe_allow_html=True)
 
-    if not submitted:
-        return
+def _render_home(message: str | None = None, error: str | None = None, result: dict | None = None) -> HTMLResponse:
+    status_block = ""
+    if message:
+        status_block = f'<div class="status ok"><strong>Success</strong><div>{html.escape(message)}</div></div>'
+    elif error:
+        status_block = f'<div class="status error"><strong>Error</strong><div>{html.escape(error)}</div></div>'
 
-    email = email.strip()
+    result_block = ""
+    if result is not None:
+        result_block = f'<div class="card"><h2>Result</h2><pre>{_pretty(result)}</pre></div>'
+
+    body = f"""
+    {status_block}
+    <div class="grid">
+      <div class="card">
+        <h2>Candidate Intake</h2>
+        <p>Upload a PDF resume and queue a recommendation request.</p>
+        <form action="/intake" method="post" enctype="multipart/form-data">
+          <div class="field"><label>Email</label><input name="email" type="email" placeholder="name@example.com" required /></div>
+          <div class="field"><label>Target role</label><select name="role" required>{''.join(f'<option value="{html.escape(role)}">{html.escape(role)}</option>' for role in ROLE_OPTIONS)}</select></div>
+          <div class="field"><label>Resume PDF</label><input name="resume" type="file" accept="application/pdf" required /></div>
+          <button class="button" type="submit">Queue request</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Recommendation Plan</h2>
+        <p>Send a JSON workflow context to the service layer.</p>
+        <form action="/recommendations/run" method="post">
+          <div class="field"><label>Context JSON</label><textarea name="context_json">{html.escape(json.dumps({
+        "intent": "auto",
+        "resume_text": "...",
+        "keywords": "software engineer",
+        "location": "remote",
+        "max_results_per_source": 20,
+        "save_to_db": False,
+    }, indent=2))}</textarea></div>
+          <button class="button" type="submit">Run plan</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Resume Service</h2>
+        <form action="/resume/analyze" method="post" enctype="multipart/form-data">
+          <div class="field"><label>Resume PDF</label><input name="resume" type="file" accept="application/pdf" required /></div>
+          <button class="button" type="submit">Analyze resume</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Job Service</h2>
+        <form action="/jobs/discover" method="post">
+          <div class="field"><label>Keywords</label><input name="keywords" placeholder="software engineer" required /></div>
+          <div class="field"><label>Location</label><input name="location" placeholder="remote" /></div>
+          <button class="button" type="submit">Discover jobs</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Company Service</h2>
+        <form action="/company/research" method="post">
+          <div class="field"><label>Company</label><input name="company" placeholder="Google" required /></div>
+          <button class="button" type="submit">Research company</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Application Service</h2>
+        <form action="/applications/track" method="post">
+          <div class="field"><label>Email</label><input name="email" type="email" placeholder="name@example.com" required /></div>
+          <div class="field"><label>Action</label><select name="application_action"><option value="list">list</option><option value="track">track</option><option value="update">update</option></select></div>
+          <div class="field"><label>Target job URL</label><input name="target_job_url" placeholder="https://..." /></div>
+          <div class="field"><label>Status</label><input name="application_status" placeholder="saved" /></div>
+          <button class="button" type="submit">Update application</button>
+        </form>
+      </div>
+    </div>
+    {result_block}
+    """
+    return HTMLResponse(_page_shell("JobFinder.io", body))
+
+
+@app.get("/", response_class=HTMLResponse)
+def home() -> HTMLResponse:
+    return _render_home()
+
+
+@app.get("/healthz")
+def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/api/services")
+def services() -> dict[str, object]:
+    return {"services": SERVICE_NAMES}
+
+
+@app.post("/api/intake")
+async def api_intake(
+    email: str = Form(...),
+    role: str = Form(...),
+    resume: UploadFile = File(...),
+) -> dict[str, object]:
+    email = email.strip().lower()
+    role = role.strip()
     if not email or not _is_valid_email(email):
-        st.error("Please enter a valid email address.")
-        return
+        raise HTTPException(status_code=400, detail="Please enter a valid email address.")
+    if role not in ROLE_OPTIONS:
+        raise HTTPException(status_code=400, detail="Please choose a valid target role.")
 
-    if not role:
-        st.error("Please select a role.")
-        return
-
-    if resume is None:
-        st.error("Please upload your latest resume PDF.")
-        return
+    content = await resume.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Resume file is empty.")
 
     try:
         stored_resume_path = upload_resume_bytes(
-            original_filename=resume.name,
-            content_bytes=bytes(resume.getbuffer()),
-            content_type=resume.type or "application/pdf",
+            original_filename=resume.filename or "resume.pdf",
+            content_bytes=content,
+            content_type=resume.content_type or "application/pdf",
         )
-        
-        # Create request for the selected role
         request_id = create_job_recommendation_request(
             email=email,
             requested_role=role,
-            resume_original_name=resume.name,
+            resume_original_name=resume.filename or "resume.pdf",
             resume_stored_path=stored_resume_path,
         )
-        
-        st.success(
-            f"✓ Request queued successfully for {role}. Request ID: {request_id}. "
-            "The scheduler will pick this up in the next run and email your recommendations."
-        )
     except Exception as exc:
-        st.error(f"Could not queue request: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {"status": "queued", "request_id": request_id, "email": email, "role": role, "resume_path": stored_resume_path}
 
 
-def _handle_resume_input(form_key: str, label: str = "Resume") -> str:
-    resume_file = st.file_uploader(f"Upload {label} (PDF)", type=["pdf"], key=f"{form_key}_file")
-    
-    if resume_file:
-        try:
-            doc = fitz.open(stream=resume_file.getvalue(), filetype="pdf")
-            pages = []
-            for page in doc:
-                text = page.get_text("text")
-                text = re.sub(r"[ \t]+", " ", text)
-                text = re.sub(r"\n{3,}", "\n\n", text)
-                pages.append(text.strip())
-            doc.close()
-            return "\n".join(pages)
-        except Exception as e:
-            st.error(f"Failed to read PDF: {e}")
-            
-    return ""
-
-def _execute_and_display_result(context: dict) -> None:
-    with st.spinner("Running orchestrator..."):
-        try:
-            result = run_orchestrator(context)
-        except Exception as exc:
-            st.error(f"Orchestrator run failed: {exc}")
-            return
-
-    st.success(f"Run completed with status: {result.get('status', 'unknown')}")
-    st.subheader("Execution Summary")
-    st.json(
-        {
-            "execution_plan": result.get("execution_plan", []),
-            "available_agents": result.get("available_agents", []),
-            "next_actions": result.get("next_actions", []),
-        }
-    )
-
-    run_info = result.get("run", {})
-    steps = run_info.get("steps", [])
-    if steps:
-        st.subheader("Workflow Steps")
-        st.dataframe(steps, use_container_width=True)
-
-    outputs = result.get("outputs", {})
-    if outputs:
-        st.subheader("Agent Outputs")
-        for agent_name, payload in outputs.items():
-            with st.expander(agent_name, expanded=False):
-                st.json(payload)
-
-
-def _render_workflow_monitor() -> None:
-    st.header("Orchestrator Agent Studio")
-    st.caption("Run orchestrated agent plans with live context and inspect outputs.")
-
-    intents = [
-        "auto",
-        "bootstrap",
-        "full_assistant",
-        "analyze_resume",
-        "discover_jobs",
-        "tailor_resume",
-        "optimize_ats",
-        "research_company",
-        "track_application",
-        "prepare_interview",
-        "career_coaching",
-    ]
-    application_actions = ["list", "track", "update"]
-    application_statuses = ["saved", "applied", "interviewing", "offered", "rejected", "archived"]
-    sources = ["", "hn", "greenhouse", "linkedin"]
-
-    with st.form("orchestrator_run_form", clear_on_submit=False):
-        col1, col2 = st.columns(2)
-        with col1:
-            intent = st.selectbox("Intent", options=intents, index=0)
-            fail_fast = st.checkbox("Fail fast", value=True)
-            use_llm = st.checkbox("Enable LLM augmentation where supported", value=False)
-        with col2:
-            source = st.selectbox("Source filter (optional)", options=sources, index=0)
-            max_results_per_source = st.number_input(
-                "Max results per source",
-                min_value=1,
-                max_value=200,
-                value=25,
-                step=1,
-            )
-            save_to_db = st.checkbox("Save scraped jobs to DB", value=True)
-
-        custom_plan = st.multiselect(
-            "Custom execution plan (optional, overrides intent routing)",
-            options=ALL_AGENT_NAMES,
-            default=[],
+@app.post("/intake", response_class=HTMLResponse)
+async def intake_html(email: str = Form(...), role: str = Form(...), resume: UploadFile = File(...)) -> HTMLResponse:
+    try:
+        payload = await api_intake(email=email, role=role, resume=resume)
+        return _render_home(
+            message=f"Request queued successfully for {payload['role']}. Request ID: {payload['request_id']}.",
+            result=payload,
         )
-        keywords = st.text_input("Keywords (for job_collection)", placeholder="software engineer")
-        target_roles_raw = st.text_input(
-            "Target roles (comma-separated, optional)",
-            placeholder="Backend Engineer, AI Engineer",
-        )
-        job_keyword = st.text_input("Job keyword (optional target job resolver)")
-        target_job_url = st.text_input("Target job URL (optional)")
-        company = st.text_input("Company (optional)")
-        job_title = st.text_input("Job title (optional)")
-        email = st.text_input("Email (optional, required for application tracking)")
+    except HTTPException as exc:
+        return _render_home(error=str(exc.detail))
 
-        st.markdown("**Application tracker controls**")
-        app_col1, app_col2, app_col3 = st.columns(3)
-        with app_col1:
-            application_action = st.selectbox("application_action", options=application_actions, index=0)
-        with app_col2:
-            application_status = st.selectbox("application_status", options=application_statuses, index=0)
-        with app_col3:
-            application_record_id_raw = st.text_input("application_record_id (for update)", placeholder="123")
-        follow_up_due_at = st.text_input("follow_up_due_at (ISO, optional)", placeholder="2026-07-25T10:00:00")
-        application_notes = st.text_area("application_notes (optional)", height=80)
 
-        st.markdown("**Resume input**")
-        resume_text = st.text_area("resume_text (optional)", height=140)
-        structured_resume_raw = st.text_area(
-            "structured_resume JSON (optional)",
-            placeholder='{"skills":["python","sql"],"experience":[],"projects":[]}',
-            height=160,
-        )
-
-        submitted = st.form_submit_button("Run orchestrator")
-
-    if not submitted:
-        return
+@app.post("/api/resume/analyze")
+async def api_resume_analyze(
+    resume: UploadFile = File(...),
+) -> dict[str, object]:
+    content = await resume.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Resume file is empty.")
 
     try:
-        structured_resume = _parse_json_object(structured_resume_raw)
+        resume_text = _extract_pdf_text_bytes(content)
+        return analyze_resume_service(resume_text=resume_text)
     except Exception as exc:
-        st.error(f"Invalid structured_resume JSON: {exc}")
-        return
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    target_roles = [role.strip() for role in target_roles_raw.split(",") if role.strip()]
-    context: dict = {
-        "intent": intent,
-        "fail_fast": fail_fast,
-        "use_llm": use_llm,
-        "max_results_per_source": int(max_results_per_source),
-        "save_to_db": bool(save_to_db),
+
+@app.post("/resume/analyze", response_class=HTMLResponse)
+async def resume_analyze_html(resume: UploadFile = File(...)) -> HTMLResponse:
+    try:
+        result = await api_resume_analyze(resume=resume)
+        return _render_home(message=result["summary"], result=result)
+    except HTTPException as exc:
+        return _render_home(error=str(exc.detail))
+
+
+@app.post("/api/jobs/discover")
+async def api_jobs_discover(
+    keywords: str = Form(...),
+    location: str = Form("remote"),
+    source: str | None = Form(None),
+    max_results_per_source: int = Form(25),
+    save_to_db: bool = Form(True),
+) -> dict[str, object]:
+    sources = [source] if source else None
+    return discover_jobs_service(
+        keywords=keywords,
+        location=location or "remote",
+        sources=sources,
+        max_results_per_source=max(1, int(max_results_per_source)),
+        save_to_db=bool(save_to_db),
+    )
+
+
+@app.post("/jobs/discover", response_class=HTMLResponse)
+async def jobs_discover_html(
+    keywords: str = Form(...),
+    location: str = Form("remote"),
+    source: str | None = Form(None),
+    max_results_per_source: int = Form(25),
+    save_to_db: bool = Form(True),
+) -> HTMLResponse:
+    try:
+        result = await api_jobs_discover(
+            keywords=keywords,
+            location=location,
+            source=source,
+            max_results_per_source=max_results_per_source,
+            save_to_db=save_to_db,
+        )
+        return _render_home(message=result["summary"], result=result)
+    except HTTPException as exc:
+        return _render_home(error=str(exc.detail))
+
+
+@app.post("/api/company/research")
+async def api_company_research(
+    company: str = Form(...),
+    target_job_url: str | None = Form(None),
+    source: str | None = Form(None),
+    use_llm: bool = Form(False),
+) -> dict[str, object]:
+    return research_company_service(
+        company=company,
+        target_job_url=target_job_url,
+        source=source,
+        use_llm=bool(use_llm),
+    )
+
+
+@app.post("/company/research", response_class=HTMLResponse)
+async def company_research_html(
+    company: str = Form(...),
+    target_job_url: str | None = Form(None),
+    source: str | None = Form(None),
+    use_llm: bool = Form(False),
+) -> HTMLResponse:
+    try:
+        result = await api_company_research(company=company, target_job_url=target_job_url, source=source, use_llm=use_llm)
+        return _render_home(message=result["summary"], result=result)
+    except HTTPException as exc:
+        return _render_home(error=str(exc.detail))
+
+
+@app.post("/api/applications/track")
+async def api_applications_track(payload: dict) -> dict[str, object]:
+    return application_tracker_service(payload)
+
+
+@app.post("/applications/track", response_class=HTMLResponse)
+async def applications_track_html(
+    email: str = Form(...),
+    application_action: str = Form("list"),
+    target_job_url: str | None = Form(None),
+    application_status: str | None = Form(None),
+    application_notes: str | None = Form(None),
+    follow_up_due_at: str | None = Form(None),
+    application_record_id: int | None = Form(None),
+) -> HTMLResponse:
+    payload = {
+        "email": email,
         "application_action": application_action,
+        "target_job_url": target_job_url,
         "application_status": application_status,
+        "application_notes": application_notes,
+        "follow_up_due_at": follow_up_due_at,
+        "application_record_id": application_record_id,
     }
-    if custom_plan:
-        context["execution_plan"] = custom_plan
-    if source:
-        context["source"] = source
-    if keywords.strip():
-        context["keywords"] = keywords.strip()
-    if target_roles:
-        context["target_roles"] = target_roles
-    if job_keyword.strip():
-        context["job_keyword"] = job_keyword.strip()
-    if target_job_url.strip():
-        context["target_job_url"] = target_job_url.strip()
-    if company.strip():
-        context["company"] = company.strip()
-    if job_title.strip():
-        context["job_title"] = job_title.strip()
-    if email.strip():
-        context["email"] = email.strip().lower()
-    if follow_up_due_at.strip():
-        context["follow_up_due_at"] = follow_up_due_at.strip()
-    if application_notes.strip():
-        context["application_notes"] = application_notes.strip()
-    if application_record_id_raw.strip():
-        try:
-            context["application_record_id"] = int(application_record_id_raw.strip())
-        except ValueError:
-            st.error("application_record_id must be an integer.")
-            return
-    if resume_text.strip():
-        context["resume_text"] = resume_text.strip()
-    if structured_resume is not None:
-        context["structured_resume"] = structured_resume
-
-    _execute_and_display_result(context)
+    try:
+        result = application_tracker_service(payload)
+        return _render_home(message=result["summary"], result=result)
+    except Exception as exc:
+        return _render_home(error=str(exc))
 
 
-def _render_job_discovery() -> None:
-    st.title("Job Discovery")
-    st.markdown("Discover personalized job recommendations and search across platforms.")
-    
-    sources = ["", "hn", "greenhouse", "linkedin"]
-    
-    with st.form("job_discovery_form"):
-        keywords = st.text_input("Keywords", placeholder="software engineer")
-        target_roles = st.text_input("Target Roles (comma-separated)", placeholder="Backend Engineer, AI Engineer")
-        source = st.selectbox("Source filter (optional)", options=sources, index=0)
-        max_results = st.number_input("Max results per source", min_value=1, max_value=200, value=25)
-        save_to_db = st.checkbox("Save scraped jobs to DB", value=True)
-        
-        submitted = st.form_submit_button("Discover Jobs")
-        
-    if submitted:
-        roles_list = [role.strip() for role in target_roles.split(",") if role.strip()]
-        context = {
-            "intent": "discover_jobs",
-            "keywords": keywords.strip(),
-            "target_roles": roles_list,
-            "source": source,
-            "max_results_per_source": int(max_results),
-            "save_to_db": bool(save_to_db)
-        }
-        _execute_and_display_result(context)
+@app.get("/api/applications")
+def api_list_applications(email: str | None = None, status: str | None = None, limit: int = 50) -> dict[str, object]:
+    records = list_application_records(email=email, status=status, limit=max(1, int(limit)))
+    return {"status": "completed", "data": {"application_records": records}}
 
-def _render_company_research() -> None:
-    st.title("Company Research")
-    st.markdown("Deep dive into company culture, financials, and recent news.")
-    
-    with st.form("company_research_form"):
-        company = st.text_input("Company Name", placeholder="Google")
-        submitted = st.form_submit_button("Research Company")
-        
-    if submitted:
-        context = {
-            "intent": "research_company",
-            "company": company.strip()
-        }
-        _execute_and_display_result(context)
 
-def _render_applications() -> None:
-    st.title("Applications")
-    st.markdown("Track and manage your job applications pipeline.")
-    
-    actions = ["list", "track", "update"]
-    statuses = ["saved", "applied", "interviewing", "offered", "rejected", "archived"]
-    
-    with st.form("applications_form"):
-        action = st.selectbox("Action", options=actions)
-        email = st.text_input("Email", placeholder="name@example.com")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            status = st.selectbox("Status", options=statuses)
-            record_id = st.text_input("Record ID (for update)", placeholder="123")
-        with col2:
-            target_job_url = st.text_input("Target Job URL")
-            follow_up = st.text_input("Follow-up Date (ISO)", placeholder="2026-07-25T10:00:00")
-            
-        notes = st.text_area("Notes")
-        
-        submitted = st.form_submit_button("Submit Application Action")
-        
-    if submitted:
-        context = {
-            "intent": "track_application",
-            "application_action": action,
-            "email": email.strip(),
-            "application_status": status,
-            "target_job_url": target_job_url.strip(),
-            "follow_up_due_at": follow_up.strip(),
-            "application_notes": notes.strip()
-        }
-        if record_id.strip():
-            try:
-                context["application_record_id"] = int(record_id.strip())
-            except ValueError:
-                st.error("Record ID must be an integer.")
-                return
-        _execute_and_display_result(context)
+@app.post("/api/resume/tailor")
+async def api_resume_tailor(payload: dict) -> dict[str, object]:
+    structured_resume = payload.get("structured_resume")
+    if not isinstance(structured_resume, dict):
+        raise HTTPException(status_code=400, detail="structured_resume is required.")
+    try:
+        return tailor_resume_service(
+            structured_resume=structured_resume,
+            target_job_url=payload.get("target_job_url"),
+            job_keyword=payload.get("job_keyword"),
+            company=payload.get("company"),
+            job_title=payload.get("job_title"),
+            use_llm=bool(payload.get("use_llm", False)),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-def _render_resume_analyzer() -> None:
-    st.title("Resume Analyzer")
-    st.markdown("Upload your resume text for AI-powered feedback and scoring.")
-    
-    with st.form("resume_analyzer_form"):
-        resume_text = _handle_resume_input("resume_analyzer")
-        submitted = st.form_submit_button("Analyze Resume")
-        
-    if submitted:
-        if not resume_text:
-            st.error("Please upload your resume PDF.")
-            return
-        context = {
-            "intent": "analyze_resume",
-            "resume_text": resume_text.strip()
-        }
-        _execute_and_display_result(context)
 
-def _render_resume_tailor() -> None:
-    st.title("Resume Tailor")
-    st.markdown("Tailor your resume to specific job descriptions.")
-    
-    with st.form("resume_tailor_form"):
-        resume_text = _handle_resume_input("resume_tailor", label="Base Resume Text")
-        col1, col2 = st.columns(2)
-        with col1:
-            target_job_url = st.text_input("Target Job URL")
-        with col2:
-            job_title = st.text_input("Job Title")
-            
-        submitted = st.form_submit_button("Tailor Resume")
-        
-    if submitted:
-        if not resume_text:
-            st.error("Please upload your resume PDF.")
-            return
-        context = {
-            "intent": "tailor_resume",
-            "resume_text": resume_text.strip(),
-            "target_job_url": target_job_url.strip(),
-            "job_title": job_title.strip()
-        }
-        _execute_and_display_result(context)
+@app.post("/api/ats/optimize")
+async def api_ats_optimize(payload: dict) -> dict[str, object]:
+    structured_resume = payload.get("structured_resume")
+    if not isinstance(structured_resume, dict):
+        raise HTTPException(status_code=400, detail="structured_resume is required.")
+    try:
+        return ats_optimization_service(
+            structured_resume=structured_resume,
+            target_job_url=payload.get("target_job_url"),
+            job_keyword=payload.get("job_keyword"),
+            company=payload.get("company"),
+            job_title=payload.get("job_title"),
+            use_llm=bool(payload.get("use_llm", False)),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-def _render_ats_optimizer() -> None:
-    st.title("ATS Optimizer")
-    st.markdown("Ensure your resume passes ATS keyword and formatting checks.")
-    
-    with st.form("ats_optimizer_form"):
-        resume_text = _handle_resume_input("ats_optimizer")
-        job_keyword = st.text_input("Job Keywords")
-        submitted = st.form_submit_button("Optimize for ATS")
-        
-    if submitted:
-        if not resume_text:
-            st.error("Please upload your resume PDF.")
-            return
-        context = {
-            "intent": "optimize_ats",
-            "resume_text": resume_text.strip(),
-            "job_keyword": job_keyword.strip()
-        }
-        _execute_and_display_result(context)
 
-def _render_interview_prep() -> None:
-    st.title("Interview Prep")
-    st.markdown("Practice technical and behavioral questions with an AI interviewer.")
-    
-    with st.form("interview_prep_form"):
-        resume_text = _handle_resume_input("interview_prep")
-        target_roles = st.text_input("Target Roles (comma-separated)")
-        col1, col2 = st.columns(2)
-        with col1:
-            company = st.text_input("Company")
-        with col2:
-            job_title = st.text_input("Job Title")
-            
-        submitted = st.form_submit_button("Generate Interview Prep")
-        
-    if submitted:
-        if not resume_text:
-            st.error("Please upload your resume PDF.")
-            return
-        roles_list = [role.strip() for role in target_roles.split(",") if role.strip()]
-        context = {
-            "intent": "prepare_interview",
-            "resume_text": resume_text,
-            "target_roles": roles_list,
-            "company": company.strip(),
-            "job_title": job_title.strip()
-        }
-        _execute_and_display_result(context)
+@app.post("/api/interview/prep")
+async def api_interview_prep(payload: dict) -> dict[str, object]:
+    structured_resume = payload.get("structured_resume")
+    if not isinstance(structured_resume, dict):
+        raise HTTPException(status_code=400, detail="structured_resume is required.")
+    try:
+        return interview_prep_service(
+            structured_resume=structured_resume,
+            target_job_url=payload.get("target_job_url"),
+            job_keyword=payload.get("job_keyword"),
+            company=payload.get("company"),
+            job_title=payload.get("job_title"),
+            use_llm=bool(payload.get("use_llm", False)),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-def _render_career_coach() -> None:
-    st.title("Career Coach")
-    st.markdown("Get personalized career advice and strategic planning.")
-    
-    with st.form("career_coach_form"):
-        resume_text = _handle_resume_input("career_coach")
-        target_roles = st.text_input("Target Roles (comma-separated)")
-        submitted = st.form_submit_button("Get Coaching Advice")
-        
-    if submitted:
-        if not resume_text:
-            st.error("Please upload your resume PDF.")
-            return
-        roles_list = [role.strip() for role in target_roles.split(",") if role.strip()]
-        context = {
-            "intent": "career_coaching",
-            "resume_text": resume_text.strip(),
-            "target_roles": roles_list
-        }
-        _execute_and_display_result(context)
+
+@app.post("/api/career/coach")
+async def api_career_coach(payload: dict) -> dict[str, object]:
+    structured_resume = payload.get("structured_resume")
+    if not isinstance(structured_resume, dict):
+        raise HTTPException(status_code=400, detail="structured_resume is required.")
+    try:
+        return career_coach_service(
+            structured_resume=structured_resume,
+            source=payload.get("source"),
+            use_llm=bool(payload.get("use_llm", False)),
+            market_sample_limit=int(payload.get("market_sample_limit", 400)),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/recommendations/run")
+async def api_recommendations_run(payload: dict) -> dict[str, object]:
+    try:
+        return recommend_service_plan(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/recommendations/run", response_class=HTMLResponse)
+async def recommendations_run_html(context_json: str = Form(...)) -> HTMLResponse:
+    try:
+        payload = _parse_json_object(context_json)
+        result = recommend_service_plan(payload)
+        return _render_home(message="Recommendation plan completed.", result=result)
+    except (ValueError, json.JSONDecodeError) as exc:
+        return _render_home(error=f"Invalid context JSON: {exc}")
+    except Exception as exc:
+        return _render_home(error=f"Recommendation plan failed: {exc}")
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_, exc: HTTPException):  # type: ignore[override]
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
 
 def main() -> None:
-    st.set_page_config(
-        page_title="JobFinder.io",
-        page_icon="🎯",
-        layout="wide",
-    )
-    _init_storage()
-    _inject_styles()
-
-    st.sidebar.title("Navigation")
-    
-    pages = {
-        "🏠 Dashboard": ["Overview"],
-        "🎯 Job Search": ["Job Discovery", "Company Research", "Applications"],
-        "📄 Resume Lab": ["Resume Analyzer", "Resume Tailor", "ATS Optimizer"],
-        "🚀 Interview Center": ["Interview Prep", "Career Coach"],
-        "⚙️ Workflow Monitor": ["Agent Studio"]
-    }
-
-    section = st.sidebar.selectbox("Section", list(pages.keys()))
-    page = st.sidebar.radio("Page", pages[section])
-
-    if section == "🏠 Dashboard" and page == "Overview":
-        _render_dashboard()
-    elif section == "🎯 Job Search":
-        if page == "Job Discovery":
-            _render_job_discovery()
-        elif page == "Company Research":
-            _render_company_research()
-        elif page == "Applications":
-            _render_applications()
-    elif section == "📄 Resume Lab":
-        if page == "Resume Analyzer":
-            _render_resume_analyzer()
-        elif page == "Resume Tailor":
-            _render_resume_tailor()
-        elif page == "ATS Optimizer":
-            _render_ats_optimizer()
-    elif section == "🚀 Interview Center":
-        if page == "Interview Prep":
-            _render_interview_prep()
-        elif page == "Career Coach":
-            _render_career_coach()
-    elif section == "⚙️ Workflow Monitor" and page == "Agent Studio":
-        _render_workflow_monitor()
+    uvicorn.run("frontend_app:app", host="0.0.0.0", port=8000, reload=False)
 
 
 if __name__ == "__main__":
