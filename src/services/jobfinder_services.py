@@ -17,9 +17,7 @@ from src.db.db import (
     update_application_record_status,
     upsert_application_record,
 )
-from src.embedder import AVAILABLE_MODELS, DEFAULT_MODEL, EMBEDDING_PROVIDER, FIXED_EMBEDDING_DIM
 from src.llm_client import call_llm_for_json
-from src.matcher import load_resume_artifacts, rank_jobs_for_resume
 from src.normalizer import normalize_skills
 from src.resume_parser import extract_sections
 from src.scrapers.orchestrator import run_all_scrapers
