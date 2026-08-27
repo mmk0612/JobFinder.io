@@ -21,14 +21,10 @@ import logging
 import os
 from pathlib import Path
 
-import numpy as np
-
 from src.db.db import get_jobs_for_indexing, update_processed_job
-from src.embedder import AVAILABLE_MODELS, generate_job_embedding, generate_job_embeddings
 from src.job_description_parser import extract_job_description
 from src.normalizer import normalize_job_description
 from src.scrapers.models import JobListing
-from src.vector_store import ResumeVectorStore, dim_for_model
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +101,9 @@ async def process_job_listings_async(
     if not prepared:
         return {"processed": 0, "errors": errors}
 
-    batch_docs: list[dict[str, np.ndarray | str]] | None = None
+    from src.embedder import generate_job_embedding, generate_job_embeddings
+
+    batch_docs: list[dict] | None = None
     try:
         batch_docs = await asyncio.to_thread(
             generate_job_embeddings,
@@ -166,6 +164,10 @@ def rebuild_job_index(
     index_dir: str | Path = DEFAULT_JOB_INDEX_DIR,
 ) -> int:
     """Rebuild the FAISS job index from processed rows stored in PostgreSQL."""
+    import numpy as np
+    from src.embedder import AVAILABLE_MODELS
+    from src.vector_store import ResumeVectorStore, dim_for_model
+
     rows = get_jobs_for_indexing()
     if not rows:
         model_name = AVAILABLE_MODELS.get(DEFAULT_JOB_EMBEDDING_MODEL, DEFAULT_JOB_EMBEDDING_MODEL)
