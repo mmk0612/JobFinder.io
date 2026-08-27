@@ -469,13 +469,20 @@ async def api_jobs_discover(
     max_results_per_source: int = Form(25),
     save_to_db: bool = Form(True),
 ) -> dict[str, object]:
+    request_id = create_job_recommendation_request(
+        email="discovery-request@example.com",
+        requested_role=keywords,
+        resume_original_name="none",
+        resume_stored_path="none",
+    )
     payload = {
-        "request_id": f"disc_{int(time.time())}",
+        "request_id": request_id,
         "requested_role": keywords,
         "location": location or "remote",
         "sources": [source] if source else None,
         "max_results_per_source": max(1, int(max_results_per_source)),
         "save_to_db": bool(save_to_db),
+        "is_standalone": True,
         "created_at": time.time(),
     }
 

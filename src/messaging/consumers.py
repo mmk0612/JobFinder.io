@@ -140,11 +140,12 @@ def handle_job_scrape(payload: dict[str, Any]) -> None:
     max_results = int(payload.get("max_results_per_source") or 25)
 
     logger.info(f"[%s] Triggering job scrape for role: %s", request_id, role)
-    update_recommendation_request_status(
-        request_id=request_id,
-        status="processing",
-        notes=f"Scraping jobs for role: {role}...",
-    )
+    if isinstance(request_id, int) or str(request_id).isdigit():
+        update_recommendation_request_status(
+            request_id=int(request_id),
+            status="processing",
+            notes=f"Scraping jobs for role: {role}...",
+        )
 
     try:
         scrape_result = discover_jobs_service(
@@ -155,16 +156,28 @@ def handle_job_scrape(payload: dict[str, Any]) -> None:
         )
         logger.info(f"[%s] Job scrape completed: %s", request_id, scrape_result["summary"])
         
-        # Dispatch to job-processing-requested for embeddings
-        publish_json("job-processing-requested", payload, key=str(request_id))
+        is_standalone = str(request_id).startswith("disc_") or payload.get("is_standalone")
+        if is_standalone:
+            logger.info("[%s] Standalone job discovery completed.", request_id)
+            if isinstance(request_id, int) or str(request_id).isdigit():
+                update_recommendation_request_status(
+                    request_id=int(request_id),
+                    status="done",
+                    notes=f"Job discovery completed: {scrape_result['summary']}",
+                )
+            return
+
+        # Dispatch to job-processing-requested for full pipeline
+        publish_json(TOPIC_JOB_PROCESSING_REQUESTED, payload, key=str(request_id))
 
     except Exception as exc:
         logger.error(f"[%s] Job scrape failed: %s", request_id, exc)
-        update_recommendation_request_status(
-            request_id=request_id,
-            status="failed",
-            notes=f"Job scrape failed: {exc}",
-        )
+        if isinstance(request_id, int) or str(request_id).isdigit():
+            update_recommendation_request_status(
+                request_id=int(request_id),
+                status="failed",
+                notes=f"Job scrape failed: {exc}",
+            )
 
 
 # ── Step 3: Job Processing (Embeddings) ───────────────────────────────────────
