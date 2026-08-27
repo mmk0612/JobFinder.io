@@ -1,0 +1,1 @@
+from frontend_app import app
