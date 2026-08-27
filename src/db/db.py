@@ -698,6 +698,20 @@ def get_recommendation_requests_by_status(
         return conn.execute(sql, params).fetchall()
 
 
+def get_recommendation_request_by_id(request_id: int) -> dict | None:
+    """Fetch recommendation request details by ID."""
+    with _conn() as conn:
+        return conn.execute(
+            """
+            SELECT id, email, requested_role, requested_roles, resume_original_name,
+                   resume_stored_path, status, notes, created_at, updated_at
+            FROM job_recommendation_requests
+            WHERE id = %(id)s
+            """,
+            {"id": int(request_id)},
+        ).fetchone()
+
+
 def update_recommendation_request_status(
     *,
     request_id: int,

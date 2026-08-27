@@ -357,14 +357,44 @@ async def api_intake(
     return {"status": "queued", "request_id": request_id, "email": email, "role": role, "resume_path": stored_resume_path}
 
 
-@app.post("/intake", response_class=HTMLResponse)
-async def intake_html(email: str = Form(...), role: str = Form(...), resume: UploadFile = File(...)) -> HTMLResponse:
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from src.db.db import apply_schema, create_job_recommendation_request, get_recommendation_request_by_id
+
+
+@app.get("/status/{req_id}", response_class=HTMLResponse)
+def status_page(req_id: str) -> HTMLResponse:
+    row = None
+    if req_id.isdigit():
+        row = get_recommendation_request_by_id(int(req_id))
+
+    status_text = row["status"] if row else "queued (processing in background)"
+    notes_text = row.get("notes", "") if row else "Task dispatched to Event Hubs / Kafka pipeline."
+    details = row if row else {"request_id": req_id, "message": "Task queued asynchronously via Event Hubs."}
+
+    body = f"""
+    <div class="card">
+      <h2>Task Status</h2>
+      <p><strong>Request ID:</strong> <code>{html.escape(req_id)}</code></p>
+      <p><strong>Current Status:</strong> <span class="pill">{html.escape(str(status_text))}</span></p>
+      {f'<p><strong>Notes:</strong> {html.escape(str(notes_text))}</p>' if notes_text else ''}
+      <div style="margin-top: 18px;">
+        <h3>Output / Payload Details</h3>
+        <pre>{_pretty(details)}</pre>
+      </div>
+      <div style="margin-top: 20px;">
+        <a class="button" href="/status/{html.escape(req_id)}">🔄 Refresh Status</a>
+        <a class="pill" href="/">← Back to Home</a>
+      </div>
+    </div>
+    """
+    return HTMLResponse(_page_shell(f"Status - Request #{req_id}", body))
+
+
+@app.post("/intake")
+async def intake_html(email: str = Form(...), role: str = Form(...), resume: UploadFile = File(...)):
     try:
         payload = await api_intake(email=email, role=role, resume=resume)
-        return _render_home(
-            message=f"Request queued successfully for {payload['role']}. Request ID: {payload['request_id']}.",
-            result=payload,
-        )
+        return RedirectResponse(url=f"/status/{payload['request_id']}", status_code=303)
     except HTTPException as exc:
         return _render_home(error=str(exc.detail))
 
@@ -405,11 +435,12 @@ async def api_resume_analyze(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.post("/resume/analyze", response_class=HTMLResponse)
-async def resume_analyze_html(resume: UploadFile = File(...)) -> HTMLResponse:
+@app.post("/resume/analyze")
+async def resume_analyze_html(resume: UploadFile = File(...)):
     try:
         result = await api_resume_analyze(resume=resume)
-        return _render_home(message=result["summary"], result=result)
+        req_id = result.get("data", {}).get("request_id") or f"anlz_{int(time.time())}"
+        return RedirectResponse(url=f"/status/{req_id}", status_code=303)
     except HTTPException as exc:
         return _render_home(error=str(exc.detail))
 
@@ -451,14 +482,14 @@ async def api_jobs_discover(
     )
 
 
-@app.post("/jobs/discover", response_class=HTMLResponse)
+@app.post("/jobs/discover")
 async def jobs_discover_html(
     keywords: str = Form(...),
     location: str = Form("remote"),
     source: str | None = Form(None),
     max_results_per_source: int = Form(25),
     save_to_db: bool = Form(True),
-) -> HTMLResponse:
+):
     try:
         result = await api_jobs_discover(
             keywords=keywords,
@@ -467,8 +498,8 @@ async def jobs_discover_html(
             max_results_per_source=max_results_per_source,
             save_to_db=save_to_db,
         )
-        msg = result.get("message") or result.get("summary") or "Task queued."
-        return _render_home(message=str(msg), result=result)
+        req_id = result.get("data", {}).get("request_id") or f"disc_{int(time.time())}"
+        return RedirectResponse(url=f"/status/{req_id}", status_code=303)
     except HTTPException as exc:
         return _render_home(error=str(exc.detail))
 
@@ -633,12 +664,13 @@ async def api_recommendations_run(payload: dict) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.post("/recommendations/run", response_class=HTMLResponse)
-async def recommendations_run_html(context_json: str = Form(...)) -> HTMLResponse:
+@app.post("/recommendations/run")
+async def recommendations_run_html(context_json: str = Form(...)):
     try:
         payload = _parse_json_object(context_json)
-        result = recommend_service_plan(payload)
-        return _render_home(message="Recommendation plan completed.", result=result)
+        result = await api_recommendations_run(payload)
+        req_id = result.get("data", {}).get("request_id") or f"plan_{int(time.time())}"
+        return RedirectResponse(url=f"/status/{req_id}", status_code=303)
     except (ValueError, json.JSONDecodeError) as exc:
         return _render_home(error=f"Invalid context JSON: {exc}")
     except Exception as exc:
