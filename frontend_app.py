@@ -358,7 +358,12 @@ async def api_intake(
 
 
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from src.db.db import apply_schema, create_job_recommendation_request, get_recommendation_request_by_id
+from src.db.db import (
+    apply_schema,
+    create_job_recommendation_request,
+    get_pipeline_event_logs,
+    get_recommendation_request_by_id,
+)
 
 
 @app.get("/status/{req_id}", response_class=HTMLResponse)
@@ -367,9 +372,14 @@ def status_page(req_id: str) -> HTMLResponse:
     if req_id.isdigit():
         row = get_recommendation_request_by_id(int(req_id))
 
+    logs = get_pipeline_event_logs(req_id)
+
     status_text = row["status"] if row else "queued (processing in background)"
     notes_text = row.get("notes", "") if row else "Task dispatched to Event Hubs / Kafka pipeline."
-    details = row if row else {"request_id": req_id, "message": "Task queued asynchronously via Event Hubs."}
+    details = {
+        "request": row if row else {"request_id": req_id, "message": "Task queued asynchronously via Event Hubs."},
+        "pipeline_event_logs": logs,
+    }
 
     body = f"""
     <div class="card">
@@ -378,7 +388,7 @@ def status_page(req_id: str) -> HTMLResponse:
       <p><strong>Current Status:</strong> <span class="pill">{html.escape(str(status_text))}</span></p>
       {f'<p><strong>Notes:</strong> {html.escape(str(notes_text))}</p>' if notes_text else ''}
       <div style="margin-top: 18px;">
-        <h3>Output / Payload Details</h3>
+        <h3>Event History ({len(logs)} event(s) logged in PostgreSQL)</h3>
         <pre>{_pretty(details)}</pre>
       </div>
       <div style="margin-top: 20px;">

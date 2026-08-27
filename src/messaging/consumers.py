@@ -33,6 +33,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 
 from src.db.db import (
     apply_schema,
+    log_pipeline_event,
     update_recommendation_request_status,
 )
 from src.messaging.kafka_bus import load_kafka_config, publish_json
@@ -298,6 +299,7 @@ def handle_recommendation(payload: dict[str, Any]) -> None:
 
 # ── CLI Entrypoint ────────────────────────────────────────────────────────────
 
+
 def run_consumer(topics: list[str] | None = None) -> None:
     handlers = {
         "resume-analysis-requested": handle_resume_analysis,
@@ -322,7 +324,14 @@ def run_consumer(topics: list[str] | None = None) -> None:
             logger.warning("No handler registered for topic '%s'", topic)
             continue
         try:
-            logger.info("Received event from topic '%s'", topic)
+            req_id = payload.get("request_id", "unknown")
+            logger.info("Received event from topic '%s' for request_id=%s", topic, req_id)
+            log_pipeline_event(
+                request_id=req_id,
+                topic=topic,
+                event_type=str(payload.get("event_type") or topic),
+                payload=payload,
+            )
             handler(payload)
         except Exception as exc:
             logger.error("Unexpected error handling event from topic '%s': %s", topic, exc)

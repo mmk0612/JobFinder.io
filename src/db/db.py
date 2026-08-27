@@ -742,6 +742,55 @@ def update_recommendation_request_status(
         return cur.rowcount
 
 
+def log_pipeline_event(
+    *,
+    request_id: str | int,
+    topic: str,
+    event_type: str = "",
+    payload: dict | None = None,
+) -> int:
+    """Store raw event payload log in pipeline_event_logs table."""
+    sql = """
+        INSERT INTO pipeline_event_logs (
+            request_id,
+            topic,
+            event_type,
+            payload,
+            created_at
+        ) VALUES (
+            %(request_id)s,
+            %(topic)s,
+            %(event_type)s,
+            %(payload)s,
+            NOW()
+        )
+        RETURNING id
+    """
+    params = {
+        "request_id": str(request_id),
+        "topic": str(topic),
+        "event_type": str(event_type),
+        "payload": Jsonb(payload or {}),
+    }
+    with _conn() as conn:
+        row = conn.execute(sql, params).fetchone()
+        conn.commit()
+        return int(row["id"]) if row else 0
+
+
+def get_pipeline_event_logs(request_id: str | int, limit: int = 50) -> list[dict]:
+    """Fetch event logs for a given request_id."""
+    sql = """
+        SELECT id, request_id, topic, event_type, payload, created_at
+        FROM pipeline_event_logs
+        WHERE request_id = %(request_id)s
+        ORDER BY created_at ASC, id ASC
+        LIMIT %(limit)s
+    """
+    with _conn() as conn:
+        return conn.execute(sql, {"request_id": str(request_id), "limit": max(1, int(limit))}).fetchall()
+
+
 def upsert_application_record(
     *,
     email: str,

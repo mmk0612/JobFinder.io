@@ -207,3 +207,20 @@ CREATE INDEX IF NOT EXISTS idx_application_records_email_status
 
 CREATE INDEX IF NOT EXISTS idx_application_records_follow_up_due
     ON application_records (follow_up_due_at ASC);
+
+-- Event logging table for tracking Kafka / Event Hubs messages in PostgreSQL
+CREATE TABLE IF NOT EXISTS pipeline_event_logs (
+    id            BIGSERIAL PRIMARY KEY,
+    request_id    TEXT        NOT NULL,
+    topic         TEXT        NOT NULL,
+    event_type    TEXT        NOT NULL DEFAULT '',
+    payload       JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_event_logs_request_id
+    ON pipeline_event_logs (request_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_event_logs_topic
+    ON pipeline_event_logs (topic, created_at DESC);
+
