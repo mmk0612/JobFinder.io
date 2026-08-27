@@ -22,7 +22,9 @@ from src.services.jobfinder_services import (
     tailor_resume_service,
     interview_prep_service,
 )
+import time
 from src.storage.s3_storage import upload_resume_bytes
+from src.messaging.kafka_bus import kafka_enabled, publish_json
 
 load_dotenv()
 
@@ -335,6 +337,20 @@ async def api_intake(
             resume_original_name=resume.filename or "resume.pdf",
             resume_stored_path=stored_resume_path,
         )
+        
+        # Publish request to the start of the event-driven pipeline
+        if kafka_enabled():
+            publish_json(
+                "resume-analysis-requested",
+                {
+                    "request_id": request_id,
+                    "email": email,
+                    "resume_stored_path": stored_resume_path,
+                    "requested_role": role,
+                    "created_at": time.time(),
+                },
+                key=str(request_id),
+            )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
