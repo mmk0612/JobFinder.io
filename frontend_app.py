@@ -24,7 +24,13 @@ from src.services.jobfinder_services import (
 )
 import time
 from src.storage.s3_storage import upload_resume_bytes
-from src.messaging.kafka_bus import kafka_enabled, publish_json
+from src.messaging.kafka_bus import (
+    TOPIC_RECOMMENDATION_REQUESTED,
+    TOPIC_RESUME_ANALYSIS_REQUESTED,
+    TOPIC_JOB_SCRAPE_REQUESTED,
+    kafka_enabled,
+    publish_json,
+)
 
 load_dotenv()
 
@@ -434,7 +440,6 @@ async def api_resume_analyze(
             "email": "analysis-request@example.com",
             "resume_stored_path": stored_resume_path,
             "requested_role": "General Analysis",
-            "is_standalone": True,
             "created_at": time.time(),
         }
 
@@ -488,7 +493,7 @@ async def api_jobs_discover(
     }
 
     if kafka_enabled():
-        publish_json("job-scrape-requested", payload, key=keywords)
+        publish_json(TOPIC_JOB_SCRAPE_REQUESTED, payload, key=keywords)
         return {
             "status": "queued",
             "message": f"Job discovery task queued asynchronously for '{keywords}'.",
