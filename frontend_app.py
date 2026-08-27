@@ -401,7 +401,8 @@ async def api_jobs_discover(
     max_results_per_source: int = Form(25),
     save_to_db: bool = Form(True),
 ) -> dict[str, object]:
-    sources = [source] if source else None
+    from src.scrapers.orchestrator import HTTP_SOURCES
+    sources = [source] if source else HTTP_SOURCES
     return discover_jobs_service(
         keywords=keywords,
         location=location or "remote",
