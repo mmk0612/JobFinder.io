@@ -434,6 +434,7 @@ async def api_resume_analyze(
             "email": "analysis-request@example.com",
             "resume_stored_path": stored_resume_path,
             "requested_role": "General Analysis",
+            "is_standalone": True,
             "created_at": time.time(),
         }
 
