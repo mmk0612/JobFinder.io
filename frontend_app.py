@@ -666,17 +666,25 @@ async def api_career_coach(payload: dict) -> dict[str, object]:
 @app.post("/api/recommendations/run")
 async def api_recommendations_run(payload: dict) -> dict[str, object]:
     try:
+        email = str(payload.get("email") or "plan-user@example.com").strip().lower()
+        role = str(payload.get("keywords") or "Software Engineer").strip()
+        request_id = create_job_recommendation_request(
+            email=email,
+            requested_role=role,
+            resume_original_name="context.json",
+            resume_stored_path="inline_context",
+        )
+        kafka_payload = {
+            "request_id": request_id,
+            "email": email,
+            "requested_role": role,
+            "location": str(payload.get("location") or "remote").strip(),
+            "context": payload,
+            "is_standalone": True,
+            "created_at": time.time(),
+        }
         if kafka_enabled():
-            req_id = f"plan_{int(time.time())}"
-            kafka_payload = {
-                "request_id": req_id,
-                "email": str(payload.get("email") or "plan-user@example.com").strip().lower(),
-                "requested_role": str(payload.get("keywords") or "Software Engineer").strip(),
-                "location": str(payload.get("location") or "remote").strip(),
-                "context": payload,
-                "created_at": time.time(),
-            }
-            publish_json("recommendation-requested", kafka_payload, key=req_id)
+            publish_json(TOPIC_RECOMMENDATION_REQUESTED, kafka_payload, key=str(request_id))
             return {
                 "status": "queued",
                 "summary": "Recommendation plan queued asynchronously via Event Hubs.",

@@ -288,7 +288,20 @@ def handle_recommendation(payload: dict[str, Any]) -> None:
         resume_json = out_dir / "structured_resume.json"
         resume_embeddings = resume_json.with_suffix(".embeddings.npz")
 
-        # Run notify.py logic
+        if payload.get("context") or not resume_json.exists():
+            from src.services.jobfinder_services import recommend_service_plan
+            ctx = payload.get("context") or {"keywords": role, "email": email}
+            result = recommend_service_plan(ctx)
+            logger.info("[%s] Recommendation plan executed successfully", request_id)
+            if isinstance(request_id, int) or str(request_id).isdigit():
+                update_recommendation_request_status(
+                    request_id=int(request_id),
+                    status="done",
+                    notes=result.get("summary") or "Recommendation plan executed successfully.",
+                )
+            return
+
+        # Run notify.py logic for full pipeline
         import subprocess
         env = os.environ.copy()
         env["NOTIFY_EMAIL_TO"] = email
@@ -310,19 +323,21 @@ def handle_recommendation(payload: dict[str, Any]) -> None:
         )
 
         logger.info(f"[%s] Recommendation digest sent successfully", request_id)
-        update_recommendation_request_status(
-            request_id=request_id,
-            status="done",
-            notes="Processed successfully. Digest sent via email.",
-        )
+        if isinstance(request_id, int) or str(request_id).isdigit():
+            update_recommendation_request_status(
+                request_id=int(request_id),
+                status="done",
+                notes="Processed successfully. Digest sent via email.",
+            )
 
     except Exception as exc:
         logger.error(f"[%s] Notification failed: %s", request_id, exc)
-        update_recommendation_request_status(
-            request_id=request_id,
-            status="failed",
-            notes=f"Notification failed: {exc}",
-        )
+        if isinstance(request_id, int) or str(request_id).isdigit():
+            update_recommendation_request_status(
+                request_id=int(request_id),
+                status="failed",
+                notes=f"Notification failed: {exc}",
+            )
 
 
 # ── CLI Entrypoint ────────────────────────────────────────────────────────────
