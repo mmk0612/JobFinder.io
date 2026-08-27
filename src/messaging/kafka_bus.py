@@ -12,6 +12,19 @@ from dataclasses import dataclass
 from typing import Any
 
 
+# ── Canonical Topic Names ───────────────────────────────────────────────────
+TOPIC_RESUME_ANALYSIS_REQUESTED  = "resume-analysis-requested"
+TOPIC_RESUME_ANALYSIS_COMPLETED  = "resume-analysis-completed"
+TOPIC_JOB_SCRAPE_REQUESTED        = "job-scrape-requested"
+TOPIC_JOB_SCRAPE_COMPLETED        = "job-scrape-completed"
+TOPIC_JOB_PROCESSING_REQUESTED    = "job-processing-requested"
+TOPIC_JOB_PROCESSING_COMPLETED    = "job-processing-completed"
+TOPIC_JOB_MATCHING_REQUESTED      = "job-matching-requested"
+TOPIC_JOB_MATCHING_COMPLETED      = "job-matching-completed"
+TOPIC_RECOMMENDATION_REQUESTED    = "recommendation-requested"
+TOPIC_RECOMMENDATION_COMPLETED    = "recommendation-completed"
+
+
 @dataclass(frozen=True)
 class KafkaConfig:
     bootstrap_servers: list[str]

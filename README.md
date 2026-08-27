@@ -73,7 +73,7 @@ For each request, the workflow marks status progression in DB:
 - `queued` -> `processing` -> `done` (or `failed` with error note).
 
 Kafka is optional and driven by `KAFKA_BOOTSTRAP_SERVERS`.
-When set, the job-processing worker publishes and consumes wake-up events on `job-processing.requested` while PostgreSQL remains the durable state store.
+When set, the job-processing worker publishes and consumes wake-up events on `job-processing-requested` while PostgreSQL remains the durable state store.
 For Azure Event Hubs Kafka compatibility, set `KAFKA_SECURITY_PROTOCOL=SASL_SSL`, `KAFKA_SASL_MECHANISM=PLAIN`, `KAFKA_SASL_USERNAME=$ConnectionString`, and store the Event Hubs connection string in `KAFKA_SASL_PASSWORD`.
 
 Required GitHub secrets for request processing:

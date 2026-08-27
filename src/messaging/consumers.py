@@ -36,7 +36,15 @@ from src.db.db import (
     log_pipeline_event,
     update_recommendation_request_status,
 )
-from src.messaging.kafka_bus import load_kafka_config, publish_json
+from src.messaging.kafka_bus import (
+    TOPIC_JOB_MATCHING_REQUESTED,
+    TOPIC_JOB_PROCESSING_REQUESTED,
+    TOPIC_JOB_SCRAPE_REQUESTED,
+    TOPIC_RECOMMENDATION_REQUESTED,
+    TOPIC_RESUME_ANALYSIS_REQUESTED,
+    load_kafka_config,
+    publish_json,
+)
 from src.services.jobfinder_services import (
     analyze_resume_service,
     discover_jobs_service,
@@ -302,11 +310,11 @@ def handle_recommendation(payload: dict[str, Any]) -> None:
 
 def run_consumer(topics: list[str] | None = None) -> None:
     handlers = {
-        "resume-analysis-requested": handle_resume_analysis,
-        "job-scrape-requested": handle_job_scrape,
-        "job-processing-requested": handle_job_processing,
-        "job-matching-requested": handle_job_matching,
-        "recommendation-requested": handle_recommendation,
+        TOPIC_RESUME_ANALYSIS_REQUESTED: handle_resume_analysis,
+        TOPIC_JOB_SCRAPE_REQUESTED: handle_job_scrape,
+        TOPIC_JOB_PROCESSING_REQUESTED: handle_job_processing,
+        TOPIC_JOB_MATCHING_REQUESTED: handle_job_matching,
+        TOPIC_RECOMMENDATION_REQUESTED: handle_recommendation,
     }
 
     if not topics:
