@@ -6,10 +6,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY requirements-full.txt .
 
 RUN pip install --upgrade pip && \
-    pip install --prefix=/install -r requirements.txt
+    pip install --prefix=/install -r requirements-full.txt
 
 COPY . .
 
