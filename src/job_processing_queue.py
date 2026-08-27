@@ -61,7 +61,7 @@ QUEUE_STALE_LOCK_SECONDS = max(
 QUEUE_TRANSPORT = (
     os.environ.get("JOB_PROCESSING_TRANSPORT", "").strip().lower() or ("kafka" if kafka_enabled() else "db")
 )
-QUEUE_KAFKA_TOPIC = os.environ.get("JOB_PROCESSING_KAFKA_TOPIC", "job-processing.requested").strip() or "job-processing.requested"
+QUEUE_KAFKA_TOPIC = os.environ.get("JOB_PROCESSING_KAFKA_TOPIC", "job-processing-requested").strip() or "job-processing-requested"
 
 
 def _kafka_sasl_mechanism() -> str | None:

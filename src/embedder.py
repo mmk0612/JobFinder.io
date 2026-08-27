@@ -40,8 +40,8 @@ if not _provider_raw:
     _provider_raw = "nvidia" if os.environ.get("NVIDIA_API_KEY", "").strip() else "local"
 EMBEDDING_PROVIDER = _provider_raw
 NVIDIA_EMBEDDING_MODEL = (
-    os.environ.get("NVIDIA_EMBEDDING_MODEL", "nvidia/nv-embedqa-e5-v5").strip()
-    or "nvidia/nv-embedqa-e5-v5"
+    os.environ.get("NVIDIA_EMBEDDING_MODEL", "nvidia/embed-qa-4").strip()
+    or "nvidia/embed-qa-4"
 )
 NVIDIA_BASE_URL = os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").strip() or "https://integrate.api.nvidia.com/v1"
 NVIDIA_EMBEDDING_TIMEOUT_SECONDS = float(
