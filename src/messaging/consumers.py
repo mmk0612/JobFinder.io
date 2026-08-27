@@ -298,11 +298,7 @@ def handle_recommendation(payload: dict[str, Any]) -> None:
 
 # ── CLI Entrypoint ────────────────────────────────────────────────────────────
 
-def run_consumer(topic: str) -> None:
-    logger.info(f"Starting consumer daemon for topic: %s", topic)
-    apply_schema()
-    consumer = _get_consumer([topic])
-
+def run_consumer(topics: list[str] | None = None) -> None:
     handlers = {
         "resume-analysis-requested": handle_resume_analysis,
         "job-scrape-requested": handle_job_scrape,
@@ -311,22 +307,31 @@ def run_consumer(topic: str) -> None:
         "recommendation-requested": handle_recommendation,
     }
 
-    handler = handlers.get(topic)
-    if not handler:
-        raise ValueError(f"No handler defined for topic: {topic}")
+    if not topics:
+        topics = list(handlers.keys())
+
+    logger.info("Starting worker daemon subscribing to topics: %s", ", ".join(topics))
+    apply_schema()
+    consumer = _get_consumer(topics)
 
     for message in consumer:
+        topic = message.topic
         payload = message.value
+        handler = handlers.get(topic)
+        if not handler:
+            logger.warning("No handler registered for topic '%s'", topic)
+            continue
         try:
+            logger.info("Received event from topic '%s'", topic)
             handler(payload)
         except Exception as exc:
-            logger.error("Unexpected error in handler: %s", exc)
+            logger.error("Unexpected error handling event from topic '%s': %s", topic, exc)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python consumers.py <topic-name>")
-        sys.exit(1)
+    # Usage:
+    #   python consumers.py                     -> listens to all 5 requested topics
+    #   python consumers.py topic1 topic2       -> listens to specified topics
+    target_topics = sys.argv[1:] if len(sys.argv) > 1 else None
+    run_consumer(target_topics)
 
-    target_topic = sys.argv[1]
-    run_consumer(target_topic)
