@@ -401,6 +401,24 @@ async def api_jobs_discover(
     max_results_per_source: int = Form(25),
     save_to_db: bool = Form(True),
 ) -> dict[str, object]:
+    payload = {
+        "request_id": f"disc_{int(time.time())}",
+        "requested_role": keywords,
+        "location": location or "remote",
+        "sources": [source] if source else None,
+        "max_results_per_source": max(1, int(max_results_per_source)),
+        "save_to_db": bool(save_to_db),
+        "created_at": time.time(),
+    }
+
+    if kafka_enabled():
+        publish_json("job-scrape-requested", payload, key=keywords)
+        return {
+            "status": "queued",
+            "message": f"Job discovery task queued asynchronously for '{keywords}'.",
+            "data": payload,
+        }
+
     from src.scrapers.orchestrator import HTTP_SOURCES
     sources = [source] if source else HTTP_SOURCES
     return discover_jobs_service(
@@ -428,7 +446,8 @@ async def jobs_discover_html(
             max_results_per_source=max_results_per_source,
             save_to_db=save_to_db,
         )
-        return _render_home(message=result["summary"], result=result)
+        msg = result.get("message") or result.get("summary") or "Task queued."
+        return _render_home(message=str(msg), result=result)
     except HTTPException as exc:
         return _render_home(error=str(exc.detail))
 
