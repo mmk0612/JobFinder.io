@@ -94,7 +94,7 @@ def _extract_pdf_text_bytes(pdf_bytes: bytes) -> str:
 
 
 def _pretty(payload: dict) -> str:
-    return html.escape(json.dumps(payload, indent=2, ensure_ascii=False))
+    return html.escape(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
 
 
 def _page_shell(title: str, body: str) -> str:
