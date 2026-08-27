@@ -108,12 +108,19 @@ def handle_resume_analysis(payload: dict[str, Any]) -> None:
             # Analyze resume
             analysis_result = analyze_resume_service(resume_text=resume_text)
             
-            # Save structured resume (in real flow this is cached/written to DB or payload)
-            payload["structured_resume"] = analysis_result.get("data", {}).get("structured_resume") or {}
-            payload["resume_text"] = resume_text
+            # If this is a standalone resume analysis request, complete here without chaining to scrapers
+            is_standalone = payload.get("requested_role") == "General Analysis" or payload.get("is_standalone")
+            if is_standalone:
+                logger.info("[%s] Standalone resume analysis completed.", request_id)
+                update_recommendation_request_status(
+                    request_id=request_id,
+                    status="done",
+                    notes="Resume analysis completed successfully.",
+                )
+                return
 
-        logger.info(f"[%s] Resume analysis completed. Dispatching job scrape.", request_id)
-        publish_json("job-scrape-requested", payload, key=str(request_id))
+        logger.info("[%s] Resume analysis completed. Dispatching job scrape.", request_id)
+        publish_json(TOPIC_JOB_SCRAPE_REQUESTED, payload, key=str(request_id))
 
     except Exception as exc:
         logger.error(f"[%s] Resume analysis failed: %s", request_id, exc)
