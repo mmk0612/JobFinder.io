@@ -17,6 +17,9 @@ class KafkaConfig:
     bootstrap_servers: list[str]
     client_id: str
     security_protocol: str
+    sasl_mechanism: str | None
+    sasl_username: str | None
+    sasl_password: str | None
     enabled: bool
 
 
@@ -27,10 +30,25 @@ def _split_csv(raw: str) -> list[str]:
 def load_kafka_config() -> KafkaConfig:
     bootstrap_servers = _split_csv(os.environ.get("KAFKA_BOOTSTRAP_SERVERS", ""))
     enabled = bool(bootstrap_servers)
+    security_protocol = os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT").strip() or "PLAINTEXT"
+    sasl_mechanism = os.environ.get("KAFKA_SASL_MECHANISM", "").strip() or None
+    sasl_password = os.environ.get("KAFKA_SASL_PASSWORD", "").strip() or None
+    sasl_username = os.environ.get("KAFKA_SASL_USERNAME", "").strip() or None
+
+    if security_protocol.upper() == "SASL_SSL":
+        sasl_mechanism = sasl_mechanism or "PLAIN"
+        sasl_username = sasl_username or "$ConnectionString"
+
+    if sasl_password and not sasl_username:
+        sasl_username = "$ConnectionString"
+
     return KafkaConfig(
         bootstrap_servers=bootstrap_servers,
         client_id=os.environ.get("KAFKA_CLIENT_ID", "jobfinder").strip() or "jobfinder",
-        security_protocol=os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT").strip() or "PLAINTEXT",
+        security_protocol=security_protocol,
+        sasl_mechanism=sasl_mechanism,
+        sasl_username=sasl_username,
+        sasl_password=sasl_password,
         enabled=enabled,
     )
 
@@ -57,6 +75,9 @@ def publish_json(topic: str, payload: dict[str, Any], *, key: str | None = None)
         bootstrap_servers=config.bootstrap_servers,
         client_id=config.client_id,
         security_protocol=config.security_protocol,
+        sasl_mechanism=config.sasl_mechanism,
+        sasl_plain_username=config.sasl_username,
+        sasl_plain_password=config.sasl_password,
         value_serializer=lambda value: json.dumps(value, default=str).encode("utf-8"),
         key_serializer=lambda value: value.encode("utf-8") if value is not None else None,
         linger_ms=10,

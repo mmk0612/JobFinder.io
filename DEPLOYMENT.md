@@ -31,6 +31,7 @@ The frontend now runs as a FastAPI application in [frontend_app.py](frontend_app
 - Use a process manager or container orchestrator for the FastAPI app, Kafka-backed job worker, and batch processors.
 - Keep PostgreSQL as the source of truth for queued request state.
 - Configure `KAFKA_BOOTSTRAP_SERVERS` to enable Kafka dispatch for the background pipeline.
+- For Azure Event Hubs Kafka compatibility, set `KAFKA_SECURITY_PROTOCOL=SASL_SSL`, `KAFKA_SASL_MECHANISM=PLAIN`, `KAFKA_SASL_USERNAME=$ConnectionString`, and store the connection string in `KAFKA_SASL_PASSWORD`.
 
 ### Suggested service split
 

@@ -12,6 +12,7 @@ Submissions are stored in PostgreSQL as queued requests for your scheduled backe
 When Kafka is configured, the queue also publishes wake-up events so the worker can drain work without tight polling loops.
 
 The FastAPI app exposes:
+
 - a landing page with a candidate intake form,
 - a JSON orchestrator endpoint,
 - a lightweight orchestrator studio form,
@@ -73,6 +74,7 @@ For each request, the workflow marks status progression in DB:
 
 Kafka is optional and driven by `KAFKA_BOOTSTRAP_SERVERS`.
 When set, the job-processing worker publishes and consumes wake-up events on `job-processing.requested` while PostgreSQL remains the durable state store.
+For Azure Event Hubs Kafka compatibility, set `KAFKA_SECURITY_PROTOCOL=SASL_SSL`, `KAFKA_SASL_MECHANISM=PLAIN`, `KAFKA_SASL_USERNAME=$ConnectionString`, and store the Event Hubs connection string in `KAFKA_SASL_PASSWORD`.
 
 Required GitHub secrets for request processing:
 

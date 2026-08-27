@@ -64,6 +64,21 @@ QUEUE_TRANSPORT = (
 QUEUE_KAFKA_TOPIC = os.environ.get("JOB_PROCESSING_KAFKA_TOPIC", "job-processing.requested").strip() or "job-processing.requested"
 
 
+def _kafka_sasl_mechanism() -> str | None:
+    value = os.environ.get("KAFKA_SASL_MECHANISM", "").strip()
+    return value or None
+
+
+def _kafka_sasl_username() -> str | None:
+    value = os.environ.get("KAFKA_SASL_USERNAME", "").strip()
+    return value or None
+
+
+def _kafka_sasl_password() -> str | None:
+    value = os.environ.get("KAFKA_SASL_PASSWORD", "").strip()
+    return value or None
+
+
 def _kafka_bootstrap_servers() -> list[str]:
     raw = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "")
     return [value.strip() for value in raw.split(",") if value.strip()]
@@ -322,6 +337,9 @@ def _worker_loop() -> None:
                 client_id=os.environ.get("KAFKA_CLIENT_ID", "jobfinder").strip() or "jobfinder",
                 group_id=os.environ.get("JOB_PROCESSING_KAFKA_GROUP_ID", "jobfinder-job-processing").strip() or "jobfinder-job-processing",
                 security_protocol=os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT").strip() or "PLAINTEXT",
+                sasl_mechanism=_kafka_sasl_mechanism(),
+                sasl_plain_username=_kafka_sasl_username(),
+                sasl_plain_password=_kafka_sasl_password(),
                 enable_auto_commit=False,
                 auto_offset_reset="earliest",
                 consumer_timeout_ms=1000,
