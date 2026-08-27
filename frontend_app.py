@@ -413,8 +413,14 @@ async def api_resume_analyze(
             content_bytes=content,
             content_type=resume.content_type or "application/pdf",
         )
+        request_id = create_job_recommendation_request(
+            email="analysis-request@example.com",
+            requested_role="General Analysis",
+            resume_original_name=resume.filename or "resume.pdf",
+            resume_stored_path=stored_resume_path,
+        )
         payload = {
-            "request_id": f"anlz_{int(time.time())}",
+            "request_id": request_id,
             "email": "analysis-request@example.com",
             "resume_stored_path": stored_resume_path,
             "requested_role": "General Analysis",
@@ -422,7 +428,7 @@ async def api_resume_analyze(
         }
 
         if kafka_enabled():
-            publish_json("resume-analysis-requested", payload, key=payload["request_id"])
+            publish_json("resume-analysis-requested", payload, key=str(request_id))
             return {
                 "status": "queued",
                 "summary": "Resume analysis task queued asynchronously via Event Hubs.",
