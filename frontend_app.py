@@ -378,6 +378,27 @@ async def api_resume_analyze(
         raise HTTPException(status_code=400, detail="Resume file is empty.")
 
     try:
+        stored_resume_path = upload_resume_bytes(
+            original_filename=resume.filename or "resume.pdf",
+            content_bytes=content,
+            content_type=resume.content_type or "application/pdf",
+        )
+        payload = {
+            "request_id": f"anlz_{int(time.time())}",
+            "email": "analysis-request@example.com",
+            "resume_stored_path": stored_resume_path,
+            "requested_role": "General Analysis",
+            "created_at": time.time(),
+        }
+
+        if kafka_enabled():
+            publish_json("resume-analysis-requested", payload, key=payload["request_id"])
+            return {
+                "status": "queued",
+                "summary": "Resume analysis task queued asynchronously via Event Hubs.",
+                "data": payload,
+            }
+
         resume_text = _extract_pdf_text_bytes(content)
         return analyze_resume_service(resume_text=resume_text)
     except Exception as exc:
@@ -591,6 +612,22 @@ async def api_career_coach(payload: dict) -> dict[str, object]:
 @app.post("/api/recommendations/run")
 async def api_recommendations_run(payload: dict) -> dict[str, object]:
     try:
+        if kafka_enabled():
+            req_id = f"plan_{int(time.time())}"
+            kafka_payload = {
+                "request_id": req_id,
+                "email": str(payload.get("email") or "plan-user@example.com").strip().lower(),
+                "requested_role": str(payload.get("keywords") or "Software Engineer").strip(),
+                "location": str(payload.get("location") or "remote").strip(),
+                "context": payload,
+                "created_at": time.time(),
+            }
+            publish_json("recommendation-requested", kafka_payload, key=req_id)
+            return {
+                "status": "queued",
+                "summary": "Recommendation plan queued asynchronously via Event Hubs.",
+                "data": kafka_payload,
+            }
         return recommend_service_plan(payload)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
