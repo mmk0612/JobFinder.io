@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from src.db.db import apply_schema, create_job_recommendation_request
+from src.db.db import apply_schema, create_job_recommendation_request, list_application_records
 from src.services.jobfinder_services import (
     analyze_resume_service,
     application_tracker_service,
