@@ -312,7 +312,7 @@ Required schema:
   "company_overview": "2-4 sentences on what the company does and how it creates value",
   "business_areas": ["area and why it matters to candidates"],
   "strategic_context": ["durable strategic priority and its candidate relevance; mark current claims to verify"],
-  "current_observations": [{"observation":"...", "evidence_ids":["S1"], "candidate_relevance":"..."}],
+  "current_observations": [{{"observation":"...", "evidence_ids":["S1"], "candidate_relevance":"..."}}],
   "role_relevance": ["what this company context means for the target role"],
   "interview_priorities": [
     {{"theme":"...", "why_it_matters":"...", "sample_question":"...", "story_to_prepare":"..."}}
