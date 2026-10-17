@@ -173,6 +173,7 @@ def handle_job_scrape(payload: dict[str, Any]) -> None:
             sources=payload.get("sources"),
             max_results_per_source=max_results,
             save_to_db=bool(payload.get("save_to_db", True)),
+            request_id=int(request_id) if str(request_id).isdigit() else None,
         )
         logger.info(f"[%s] Job scrape completed: %s", request_id, scrape_result["summary"])
         

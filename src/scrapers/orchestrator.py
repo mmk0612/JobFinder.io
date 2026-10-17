@@ -61,6 +61,7 @@ def run_all_scrapers(
     sources: list[str] | None = None,
     max_results_per_source: int = 50,
     save_to_db: bool = True,
+    request_id: int | None = None,
 ) -> dict:
     """
     Orchestrate multiple scrapers, deduplicate results, and (optionally) save to DB.
@@ -120,11 +121,13 @@ def run_all_scrapers(
     db_updated    = 0
 
     if save_to_db and unique_jobs:
-        from src.db.db import upsert_jobs
+        from src.db.db import link_job_discovery_results, upsert_jobs
         try:
             result = upsert_jobs(unique_jobs)
             db_inserted = result["inserted"]
             db_updated  = result["updated"]
+            if request_id is not None:
+                link_job_discovery_results(request_id, [job.url for job in unique_jobs])
         except Exception as exc:
             logger.error("DB upsert failed: %s", exc)
             errors["db"] = str(exc)

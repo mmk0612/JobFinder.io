@@ -155,6 +155,17 @@ ALTER TABLE IF EXISTS job_recommendation_requests
 CREATE INDEX IF NOT EXISTS idx_recommendation_requests_status_created
     ON job_recommendation_requests (status, created_at DESC);
 
+-- Keep the jobs discovered by each standalone/search request available to its status page.
+CREATE TABLE IF NOT EXISTS job_discovery_request_jobs (
+    request_id BIGINT NOT NULL REFERENCES job_recommendation_requests(id) ON DELETE CASCADE,
+    job_url    TEXT   NOT NULL REFERENCES jobs(url) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (request_id, job_url)
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_discovery_request_jobs_request
+    ON job_discovery_request_jobs (request_id, created_at DESC);
+
 -- Migration-safe normalization for unique (email, role) constraint.
 -- Drop old constraints that reference the old requested_roles array.
 BEGIN;

@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import re
+from urllib.parse import urlsplit
 
 import fitz
 import uvicorn
@@ -10,7 +11,12 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from src.db.db import apply_schema, create_job_recommendation_request, list_application_records
+from src.db.db import (
+    apply_schema,
+    create_job_recommendation_request,
+    get_job_discovery_results,
+    list_application_records,
+)
 from src.services.jobfinder_services import (
     analyze_resume_service,
     application_tracker_service,
@@ -446,6 +452,43 @@ def status_page(req_id: str) -> HTMLResponse:
         else ("<div class=\"status\">Your resume analysis will appear here when processing completes.</div>" if status_text in {"queued", "processing"} else "")
     )
 
+    discovery_jobs: list[dict] = []
+    if req_id.isdigit():
+        try:
+            discovery_jobs = get_job_discovery_results(int(req_id), limit=100)
+        except Exception as exc:
+            print(f"Warning: could not load discovery results for request {req_id}: {exc}")
+
+    job_cards = []
+    for job in discovery_jobs:
+        title = html.escape(str(job.get("job_title") or "Untitled role"))
+        company = html.escape(str(job.get("company") or "Company not listed"))
+        location = html.escape(str(job.get("location") or "Location not listed"))
+        source = html.escape(str(job.get("source") or "Job board").upper())
+        salary = str(job.get("salary") or "").strip()
+        description = str(job.get("processed_summary") or job.get("description") or "").strip()
+        description = html.escape(description[:320] + ("…" if len(description) > 320 else ""))
+        url = str(job.get("url") or "").strip()
+        parsed_url = urlsplit(url)
+        apply_link = (
+            f'<a class="button" href="{html.escape(url, quote=True)}" target="_blank" rel="noopener noreferrer">View job ↗</a>'
+            if parsed_url.scheme in {"http", "https"} and parsed_url.netloc
+            else ""
+        )
+        salary_line = f'<span>{html.escape(salary)}</span>' if salary else ""
+        description_line = f'<p>{description}</p>' if description else ""
+        job_cards.append(
+            f'<article class="card"><h3>{title}</h3><p><strong>{company}</strong></p>'
+            f'<p class="job-meta">{location} · {source} {salary_line}</p>{description_line}{apply_link}</article>'
+        )
+
+    discovery_block = (
+        '<section class="card" style="margin-top:18px"><h2>Discovered Jobs '
+        f'({len(job_cards)})</h2><div class="grid" style="margin-top:14px">{"".join(job_cards)}</div></section>'
+        if job_cards
+        else ""
+    )
+
     body = f"""
     <div class="card">
       <h2>Task Status</h2>
@@ -453,6 +496,7 @@ def status_page(req_id: str) -> HTMLResponse:
       <p><strong>Current Status:</strong> <span class="pill">{html.escape(str(status_text))}</span></p>
       {f'<p><strong>Notes:</strong> {html.escape(str(notes_text))}</p>' if notes_text else ''}
       {analysis_block}
+      {discovery_block}
       <div style="margin-top: 20px;">
         <a class="button" href="/status/{html.escape(req_id)}">🔄 Refresh Status</a>
         <a class="pill" href="/">← Back to Home</a>
@@ -577,6 +621,7 @@ async def api_jobs_discover(
             sources=sources,
             max_results_per_source=max(1, int(max_results_per_source)),
             save_to_db=bool(save_to_db),
+            request_id=request_id,
         )
     except Exception as exc:
         update_recommendation_request_status(

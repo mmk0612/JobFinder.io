@@ -73,6 +73,7 @@ def discover_jobs_service(
     sources: list[str] | None = None,
     max_results_per_source: int = 25,
     save_to_db: bool = True,
+    request_id: int | None = None,
 ) -> dict[str, Any]:
     summary = run_all_scrapers(
         keywords=keywords,
@@ -80,6 +81,7 @@ def discover_jobs_service(
         sources=sources,
         max_results_per_source=max_results_per_source,
         save_to_db=save_to_db,
+        request_id=request_id,
     )
     return {
         "status": "completed" if not summary.get("errors") else "completed_with_errors",

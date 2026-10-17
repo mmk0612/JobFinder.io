@@ -973,6 +973,41 @@ def get_jobs(
         return conn.execute(sql, params).fetchall()
 
 
+def link_job_discovery_results(request_id: int, urls: list[str]) -> int:
+    """Associate persisted scraped jobs with the discovery request that found them."""
+    unique_urls = list(dict.fromkeys(url for url in urls if url))
+    if not unique_urls:
+        return 0
+    sql = """
+        INSERT INTO job_discovery_request_jobs (request_id, job_url)
+        SELECT %(request_id)s, url
+        FROM jobs
+        WHERE url = ANY(%(urls)s)
+        ON CONFLICT (request_id, job_url) DO NOTHING
+        RETURNING job_url
+    """
+    with _conn() as conn:
+        rows = conn.execute(sql, {"request_id": int(request_id), "urls": unique_urls}).fetchall()
+        conn.commit()
+        return len(rows)
+
+
+def get_job_discovery_results(request_id: int, *, limit: int = 100) -> list[dict]:
+    """Return the jobs associated with a discovery request for its result page."""
+    sql = """
+        SELECT j.job_title, j.company, j.location, j.url, j.salary,
+               j.experience_required, j.source, j.description,
+               j.processed_summary, j.scraped_at
+        FROM job_discovery_request_jobs rj
+        JOIN jobs j ON j.url = rj.job_url
+        WHERE rj.request_id = %(request_id)s
+        ORDER BY rj.created_at DESC, j.scraped_at DESC
+        LIMIT %(limit)s
+    """
+    with _conn() as conn:
+        return conn.execute(sql, {"request_id": int(request_id), "limit": max(1, int(limit))}).fetchall()
+
+
 def get_jobs_needing_processing(
     *,
     source: str | None = None,
