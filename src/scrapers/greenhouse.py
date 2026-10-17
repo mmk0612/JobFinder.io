@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 from src.scrapers.base import BaseScraper, ExpectedHTTPStatusError
@@ -89,7 +90,7 @@ class GreenhouseScraper(BaseScraper):
                     continue
 
             job_id       = item.get("id", "")
-            job_location = item.get("location", {}).get("name", "") or location
+            job_location = item.get("location", {}).get("name", "")
             content      = item.get("content", "")
             description  = _strip_html(content)[:3000]
 
@@ -100,6 +101,7 @@ class GreenhouseScraper(BaseScraper):
                 source=self.source_name,
                 location=job_location,
                 description=description,
+                posted_at=_parse_datetime(item.get("updated_at")),
             ))
             if len(jobs) >= max_results:
                 break
@@ -121,3 +123,13 @@ class GreenhouseScraper(BaseScraper):
 
 def _strip_html(text: str) -> str:
     return _HTML_TAG_RE.sub(" ", text).strip()
+
+
+def _parse_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+    except ValueError:
+        return None

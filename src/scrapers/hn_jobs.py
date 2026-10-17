@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
 
 from src.scrapers.base import BaseScraper
 from src.scrapers.models import JobListing
@@ -85,16 +86,15 @@ class HNJobsScraper(BaseScraper):
 
         # HN job posts often have company | role | location in the title
         company, job_title, loc = _parse_hn_title(title, text)
-        if not location and loc:
-            location = loc
-
         return JobListing(
             job_title=job_title or title,
             company=company or "Unknown",
             url=url,
             source=self.source_name,
-            location=location,
+            location=loc,
             description=_strip_html(text)[:3000],
+            posted_at=datetime.fromtimestamp(int(hit["created_at_i"]), tz=timezone.utc)
+            if hit.get("created_at_i") else None,
         )
 
 

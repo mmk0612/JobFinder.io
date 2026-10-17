@@ -180,11 +180,11 @@ def upsert_job(job: JobListing) -> bool:
         INSERT INTO jobs (
             job_title, company, location, description,
             salary, experience_required, url,
-            source, scraped_at, expires_at, is_active
+            source, posted_at, scraped_at, expires_at, is_active
         ) VALUES (
             %(job_title)s, %(company)s, %(location)s, %(description)s,
             %(salary)s, %(experience_required)s, %(url)s,
-            %(source)s, %(scraped_at)s, %(expires_at)s, TRUE
+            %(source)s, %(posted_at)s, %(scraped_at)s, %(expires_at)s, TRUE
         )
         ON CONFLICT (url) DO UPDATE SET
             job_title           = EXCLUDED.job_title,
@@ -194,6 +194,7 @@ def upsert_job(job: JobListing) -> bool:
             salary              = EXCLUDED.salary,
             experience_required = EXCLUDED.experience_required,
             source              = EXCLUDED.source,
+            posted_at           = EXCLUDED.posted_at,
             scraped_at          = EXCLUDED.scraped_at,
             expires_at          = EXCLUDED.expires_at,
             is_active           = TRUE,
@@ -957,6 +958,8 @@ def get_jobs(
     if active_only:
         conditions.append("is_active = TRUE")
         conditions.append("expires_at > NOW()")
+        conditions.append("posted_at >= NOW() - INTERVAL '30 days'")
+        conditions.append("posted_at <= NOW() + INTERVAL '1 day'")
     if source:
         conditions.append("source = %(source)s")
         params["source"] = source
@@ -997,10 +1000,12 @@ def get_job_discovery_results(request_id: int, *, limit: int = 100) -> list[dict
     sql = """
         SELECT j.job_title, j.company, j.location, j.url, j.salary,
                j.experience_required, j.source, j.description,
-               j.processed_summary, j.scraped_at
+               j.processed_summary, j.posted_at, j.scraped_at
         FROM job_discovery_request_jobs rj
         JOIN jobs j ON j.url = rj.job_url
         WHERE rj.request_id = %(request_id)s
+          AND j.posted_at >= NOW() - INTERVAL '30 days'
+          AND j.posted_at <= NOW() + INTERVAL '1 day'
         ORDER BY rj.created_at DESC, j.scraped_at DESC
         LIMIT %(limit)s
     """
@@ -1021,6 +1026,8 @@ def get_jobs_needing_processing(
     conditions = [
         "is_active = TRUE",
         "expires_at > NOW()",
+        "posted_at >= NOW() - INTERVAL '30 days'",
+        "posted_at <= NOW() + INTERVAL '1 day'",
         "(processed_at IS NULL OR processed_at < scraped_at)",
     ]
     params: dict = {"limit": limit, "offset": offset}
@@ -1044,6 +1051,8 @@ def get_jobs_for_indexing(*, limit: int = 5000, offset: int = 0) -> list[dict]:
         SELECT * FROM jobs
         WHERE is_active = TRUE
           AND expires_at > NOW()
+          AND posted_at >= NOW() - INTERVAL '30 days'
+          AND posted_at <= NOW() + INTERVAL '1 day'
           AND processed_at IS NOT NULL
           AND jsonb_array_length(job_embedding) > 0
         ORDER BY scraped_at DESC
@@ -1067,6 +1076,8 @@ def get_matchable_jobs(
     conditions = [
         "is_active = TRUE",
         "expires_at > NOW()",
+        "posted_at >= NOW() - INTERVAL '30 days'",
+        "posted_at <= NOW() + INTERVAL '1 day'",
         "processed_at IS NOT NULL",
         "jsonb_array_length(COALESCE(job_embedding, '[]'::jsonb)) > 0",
     ]
@@ -1095,6 +1106,8 @@ def count_jobs(*, source: str | None = None, active_only: bool = True) -> int:
     if active_only:
         conditions.append("is_active = TRUE")
         conditions.append("expires_at > NOW()")
+        conditions.append("posted_at >= NOW() - INTERVAL '30 days'")
+        conditions.append("posted_at <= NOW() + INTERVAL '1 day'")
     if source:
         conditions.append("source = %(source)s")
         params["source"] = source

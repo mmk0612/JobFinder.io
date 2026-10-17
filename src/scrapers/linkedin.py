@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import time
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote_plus
 
 from bs4 import BeautifulSoup
@@ -129,12 +131,14 @@ def _parse_linkedin_page(html: str, source: str) -> list[JobListing]:
         company_el = card.select_one("h4.base-search-card__subtitle, a[class*='company'], h4")
         loc_el     = card.select_one("[class*='job-search-card__location'], span[class*='location'], span.job-search-card__location")
         link_el    = card.select_one("a.base-card__full-link, a[href*='/jobs/view/']")
+        date_el    = card.select_one("time[datetime], time, [class*='time-ago']")
 
         title   = title_el.get_text(strip=True)   if title_el   else ""
         company = company_el.get_text(strip=True) if company_el else ""
         loc     = loc_el.get_text(strip=True)     if loc_el     else ""
         href    = link_el.get("href", "")         if link_el    else ""
         url     = href.split("?")[0]              if href       else ""
+        posted_at = _parse_posted_date(date_el)
 
         if not url:
             url = card.find("a", href=True)
@@ -151,6 +155,30 @@ def _parse_linkedin_page(html: str, source: str) -> list[JobListing]:
             url=url,
             source=source,
             location=loc,
+            posted_at=posted_at,
         ))
 
     return jobs
+
+
+def _parse_posted_date(element) -> datetime | None:
+    if element is None:
+        return None
+    raw_datetime = element.get("datetime")
+    if raw_datetime:
+        try:
+            parsed = datetime.fromisoformat(str(raw_datetime).replace("Z", "+00:00"))
+            return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+        except ValueError:
+            pass
+    text = element.get_text(" ", strip=True).lower()
+    match = re.search(r"(\d+)\s*(minute|hour|day|week|month)s?\s+ago", text)
+    if not match:
+        if "just now" in text or "today" in text:
+            return datetime.now(timezone.utc)
+        return None
+    count = int(match.group(1))
+    unit = match.group(2)
+    days = {"minute": 0, "hour": 0, "day": 1, "week": 7, "month": 31}[unit] * count
+    delta = timedelta(days=days, hours=count if unit == "hour" else 0, minutes=count if unit == "minute" else 0)
+    return datetime.now(timezone.utc) - delta

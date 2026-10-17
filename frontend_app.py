@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import re
+from datetime import datetime
 from urllib.parse import urlsplit
 
 import fitz
@@ -196,6 +197,8 @@ def _render_company_research(result: dict) -> str:
     <div class="card company-report">
       <p><strong>Company Research · {esc(research.get("research_date"))}</strong></p>
       <h2>{esc(research.get("company"))}</h2>
+      {f'<p><strong>Target role:</strong> {esc(research.get("target_role"))}</p>' if research.get("target_role") else ''}
+      {f'<p><strong>Preferred location:</strong> {esc(research.get("target_location"))}</p>' if research.get("target_location") else ''}
       <p>{esc(brief.get("company_overview") or research.get("research_basis"))}</p>
       <div class="status">JobFinder local data: {esc(local_count)} matching saved roles · hiring signal: {esc(local_signal)}. {esc(local.get("coverage_note"))}</div>
       {warning}
@@ -385,7 +388,7 @@ def _render_home(message: str | None = None, error: str | None = None, result: d
         <h2>Job Service</h2>
         <form action="/jobs/discover" method="post">
           <div class="field"><label>Keywords</label><input name="keywords" placeholder="software engineer" required /></div>
-          <div class="field"><label>Location</label><input name="location" placeholder="remote" /></div>
+          <div class="field"><label>Location</label><input name="location" placeholder="City, region, country, or remote" /><small>Only include roles whose listed location matches. Results must have a source posting or update date within the last 30 days.</small></div>
           <button class="button" type="submit">Discover jobs</button>
         </form>
       </div>
@@ -394,6 +397,8 @@ def _render_home(message: str | None = None, error: str | None = None, result: d
         <h2>Company Service</h2>
         <form action="/company/research" method="post">
           <div class="field"><label>Company</label><input name="company" placeholder="Google" required /></div>
+          <div class="field"><label>Target role</label><input name="target_role" placeholder="Software Engineer" required /></div>
+          <div class="field"><label>Preferred location</label><input name="target_location" placeholder="India, Seattle, or remote" /></div>
           <button class="button" type="submit">Research company</button>
         </form>
       </div>
@@ -571,6 +576,8 @@ def status_page(req_id: str) -> HTMLResponse:
         company = html.escape(str(job.get("company") or "Company not listed"))
         location = html.escape(str(job.get("location") or "Location not listed"))
         source = html.escape(str(job.get("source") or "Job board").upper())
+        posted_at = job.get("posted_at")
+        posted_line = f'<span>Listed/updated {html.escape(posted_at.strftime("%b %d, %Y"))}</span>' if isinstance(posted_at, datetime) else ""
         salary = str(job.get("salary") or "").strip()
         description = str(job.get("processed_summary") or job.get("description") or "").strip()
         description = html.escape(description[:320] + ("…" if len(description) > 320 else ""))
@@ -585,7 +592,7 @@ def status_page(req_id: str) -> HTMLResponse:
         description_line = f'<p>{description}</p>' if description else ""
         job_cards.append(
             f'<article class="card"><h3>{title}</h3><p><strong>{company}</strong></p>'
-            f'<p class="job-meta">{location} · {source} {salary_line}</p>{description_line}{apply_link}</article>'
+            f'<p class="job-meta">{location} · {source} {posted_line} {salary_line}</p>{description_line}{apply_link}</article>'
         )
 
     discovery_block = (
@@ -769,12 +776,16 @@ async def jobs_discover_html(
 @app.post("/api/company/research")
 async def api_company_research(
     company: str = Form(...),
+    target_role: str | None = Form(None),
+    target_location: str | None = Form(None),
     target_job_url: str | None = Form(None),
     source: str | None = Form(None),
     use_llm: bool = Form(True),
 ) -> dict[str, object]:
     return research_company_service(
         company=company,
+        target_role=target_role,
+        target_location=target_location,
         target_job_url=target_job_url,
         source=source,
         use_llm=bool(use_llm),
@@ -784,12 +795,14 @@ async def api_company_research(
 @app.post("/company/research", response_class=HTMLResponse)
 async def company_research_html(
     company: str = Form(...),
+    target_role: str = Form(...),
+    target_location: str | None = Form(None),
     target_job_url: str | None = Form(None),
     source: str | None = Form(None),
     use_llm: bool = Form(True),
 ) -> HTMLResponse:
     try:
-        result = await api_company_research(company=company, target_job_url=target_job_url, source=source, use_llm=use_llm)
+        result = await api_company_research(company=company, target_role=target_role, target_location=target_location, target_job_url=target_job_url, source=source, use_llm=use_llm)
         return _render_home(message=result["summary"], result=result)
     except HTTPException as exc:
         return _render_home(error=str(exc.detail))

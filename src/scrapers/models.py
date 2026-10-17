@@ -7,6 +7,7 @@ Data model for a single scraped job listing.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
+from datetime import datetime
 
 
 @dataclass
@@ -19,6 +20,7 @@ class JobListing:
     description:         str  = ""
     salary:              str  = ""
     experience_required: str  = ""
+    posted_at:           datetime | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)

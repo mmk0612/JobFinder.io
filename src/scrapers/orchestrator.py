@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from src.scrapers.models import JobListing
@@ -47,6 +48,19 @@ def _register_scrapers() -> None:
         "greenhouse": GreenhouseScraper,
         "linkedin":   LinkedInScraper,
     }
+
+
+def _matches_requested_location(job: JobListing, requested: str) -> bool:
+    requested = requested.strip().lower()
+    if not requested or requested in {"any", "anywhere", "all"}:
+        return True
+    haystack = f"{job.location} {job.description}".lower()
+    if requested == "remote":
+        return any(marker in haystack for marker in ("remote", "work from anywhere", "distributed team", "worldwide"))
+    if requested in haystack:
+        return True
+    terms = [term for term in requested.replace(",", " ").split() if len(term) > 2]
+    return bool(terms) and all(term in haystack for term in terms)
 
 
 ALL_SOURCES = ["hn", "greenhouse", "linkedin"]
@@ -107,10 +121,31 @@ def run_all_scrapers(
             errors[source] = str(exc)
             logger.error("   %s → ERROR: %s", source, exc)
 
+    # Keep only jobs with a verifiable source posting/update date within 30 days.
+    freshness_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    excluded_stale = 0
+    excluded_undated = 0
+    excluded_location = 0
+    fresh_jobs: list[JobListing] = []
+    for job in all_jobs:
+        if not _matches_requested_location(job, location):
+            excluded_location += 1
+            continue
+        posted_at = job.posted_at
+        if posted_at is None:
+            excluded_undated += 1
+            continue
+        if posted_at.tzinfo is None:
+            posted_at = posted_at.replace(tzinfo=timezone.utc)
+        if posted_at < freshness_cutoff or posted_at > datetime.now(timezone.utc) + timedelta(days=1):
+            excluded_stale += 1
+            continue
+        fresh_jobs.append(job)
+
     # Deduplicate by URL (preserve first occurrence = highest-priority source)
     seen: set[str] = set()
     unique_jobs: list[JobListing] = []
-    for job in all_jobs:
+    for job in fresh_jobs:
         if job.url and job.url not in seen:
             seen.add(job.url)
             unique_jobs.append(job)
@@ -172,6 +207,9 @@ def run_all_scrapers(
     summary = {
         "total_scraped": total_scraped,
         "total_unique":  total_unique,
+        "excluded_stale": excluded_stale,
+        "excluded_undated": excluded_undated,
+        "excluded_location": excluded_location,
         "db_inserted":   db_inserted,
         "db_updated":    db_updated,
         "processed":     processed,

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 
     -- Metadata
     source              TEXT        NOT NULL,          -- 'linkedin' | 'indeed' | 'hn' | …
+    posted_at           TIMESTAMPTZ,
     scraped_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at          TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '30 days'),
     is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
@@ -39,6 +40,9 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 
 -- Migration-safe TTL support for pre-existing databases
+ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS posted_at TIMESTAMPTZ;
+
 ALTER TABLE jobs
     ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
 
