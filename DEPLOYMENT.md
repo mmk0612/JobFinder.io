@@ -40,3 +40,16 @@ The frontend now runs as a FastAPI application in [frontend_app.py](frontend_app
 - `src/services/jobfinder_services.py` for recommendation/business logic.
 - `scrape.py` for scraping and job ingestion.
 - `src/messaging/kafka_bus.py` and `src/job_processing_queue.py` for Kafka-backed job dispatch.
+
+## Always-on Kafka worker
+
+Vercel only runs the FastAPI request handler; it does not keep the Kafka consumer alive. Run the consumer as a separate, persistent service on a VM or container host. This repository includes `docker-compose.worker.yml` for that service.
+
+1. Check out this repository on the worker host.
+2. Create an untracked `.env.worker` file with the worker's database and S3 settings, Kafka connection settings, and any LLM, embedding, scraper, and email settings needed by the stages you enable. Use the same Kafka bootstrap server, SASL mechanism, username, and password configured in Vercel.
+3. Start the worker with `docker compose -f docker-compose.worker.yml up -d --build`.
+4. Check its state and logs with `docker compose -f docker-compose.worker.yml ps` and `docker compose -f docker-compose.worker.yml logs -f jobfinder-worker`.
+
+The container restarts after process or host restarts. Kafka offsets are committed after each handled event, so a process interruption does not commit later prefetched events. The worker and Vercel must both be able to reach the Kafka broker and PostgreSQL. Keep `.env.worker` on the host only; `.dockerignore` prevents local environment files and credentials from being copied into the image.
+
+The worker image installs the official CPU-only PyTorch wheel because it is intended for CPU hosts and should not download CUDA runtime libraries.

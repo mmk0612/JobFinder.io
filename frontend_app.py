@@ -68,7 +68,10 @@ EMAIL_PATTERN = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
 @app.on_event("startup")
 def _startup() -> None:
-    apply_schema()
+    try:
+        apply_schema()
+    except Exception as exc:
+        print(f"Warning: database schema bootstrap skipped: {exc}")
 
 
 def _is_valid_email(email: str) -> bool:
@@ -344,19 +347,28 @@ async def api_intake(
             resume_stored_path=stored_resume_path,
         )
         
-        # Publish request to the start of the event-driven pipeline
-        if kafka_enabled():
-            publish_json(
-                "resume-analysis-requested",
-                {
-                    "request_id": request_id,
-                    "email": email,
-                    "resume_stored_path": stored_resume_path,
-                    "requested_role": role,
-                    "created_at": time.time(),
-                },
-                key=str(request_id),
+        if not _dispatch_kafka_event(
+            TOPIC_RESUME_ANALYSIS_REQUESTED,
+            {
+                "request_id": request_id,
+                "email": email,
+                "resume_stored_path": stored_resume_path,
+                "requested_role": role,
+                "created_at": time.time(),
+            },
+            key=str(request_id),
+        ):
+            update_recommendation_request_status(
+                request_id=request_id,
+                status="failed",
+                notes="Kafka is not configured; this workflow requires a running background worker.",
             )
+            raise HTTPException(
+                status_code=503,
+                detail="Background processing is unavailable because Kafka is not configured.",
+            )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -367,9 +379,51 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from src.db.db import (
     apply_schema,
     create_job_recommendation_request,
-    get_pipeline_event_logs,
     get_recommendation_request_by_id,
+    log_pipeline_event,
+    update_recommendation_request_status,
 )
+
+
+def _dispatch_kafka_event(topic: str, payload: dict, *, key: str | None = None) -> bool:
+    """Publish one event and expose dispatch failures in the request status."""
+    if not kafka_enabled():
+        return False
+
+    request_id = payload.get("request_id")
+    try:
+        if not publish_json(topic, payload, key=key):
+            raise RuntimeError("Kafka is configured but the event was not published.")
+    except Exception as exc:
+        if request_id is not None and str(request_id).isdigit():
+            update_recommendation_request_status(
+                request_id=int(request_id),
+                status="failed",
+                notes=f"Could not dispatch background task: {exc}",
+            )
+        if request_id is not None:
+            try:
+                log_pipeline_event(
+                    request_id=request_id,
+                    topic=topic,
+                    event_type="dispatch_failed",
+                    payload={"error": str(exc)},
+                )
+            except Exception:
+                pass
+        raise
+
+    if request_id is not None:
+        try:
+            log_pipeline_event(
+                request_id=request_id,
+                topic=topic,
+                event_type="dispatched",
+                payload={"request_id": request_id, "status": "dispatched"},
+            )
+        except Exception as exc:
+            print(f"Warning: could not record Kafka dispatch for request {request_id}: {exc}")
+    return True
 
 
 @app.get("/status/{req_id}", response_class=HTMLResponse)
@@ -378,14 +432,19 @@ def status_page(req_id: str) -> HTMLResponse:
     if req_id.isdigit():
         row = get_recommendation_request_by_id(int(req_id))
 
-    logs = get_pipeline_event_logs(req_id)
-
     status_text = row["status"] if row else "queued (processing in background)"
     notes_text = row.get("notes", "") if row else "Task dispatched to Event Hubs / Kafka pipeline."
-    details = {
-        "request": row if row else {"request_id": req_id, "message": "Task queued asynchronously via Event Hubs."},
-        "pipeline_event_logs": logs,
-    }
+    analysis = row.get("analysis_result") if row else None
+    if isinstance(analysis, str):
+        try:
+            analysis = json.loads(analysis)
+        except json.JSONDecodeError:
+            analysis = None
+    analysis_block = (
+        f'<div class="card" style="margin-top:18px"><h2>Resume Analysis</h2><p>{html.escape(str(analysis.get("summary") or "Analysis complete."))}</p><pre>{_pretty(analysis.get("data") or analysis)}</pre></div>'
+        if isinstance(analysis, dict)
+        else ("<div class=\"status\">Your resume analysis will appear here when processing completes.</div>" if status_text in {"queued", "processing"} else "")
+    )
 
     body = f"""
     <div class="card">
@@ -393,10 +452,7 @@ def status_page(req_id: str) -> HTMLResponse:
       <p><strong>Request ID:</strong> <code>{html.escape(req_id)}</code></p>
       <p><strong>Current Status:</strong> <span class="pill">{html.escape(str(status_text))}</span></p>
       {f'<p><strong>Notes:</strong> {html.escape(str(notes_text))}</p>' if notes_text else ''}
-      <div style="margin-top: 18px;">
-        <h3>Event History ({len(logs)} event(s) logged in PostgreSQL)</h3>
-        <pre>{_pretty(details)}</pre>
-      </div>
+      {analysis_block}
       <div style="margin-top: 20px;">
         <a class="button" href="/status/{html.escape(req_id)}">🔄 Refresh Status</a>
         <a class="pill" href="/">← Back to Home</a>
@@ -443,16 +499,29 @@ async def api_resume_analyze(
             "created_at": time.time(),
         }
 
-        if kafka_enabled():
-            publish_json("resume-analysis-requested", payload, key=str(request_id))
+        if _dispatch_kafka_event(TOPIC_RESUME_ANALYSIS_REQUESTED, payload, key=str(request_id)):
             return {
                 "status": "queued",
                 "summary": "Resume analysis task queued asynchronously via Event Hubs.",
                 "data": payload,
             }
 
-        resume_text = _extract_pdf_text_bytes(content)
-        return analyze_resume_service(resume_text=resume_text)
+        try:
+            resume_text = _extract_pdf_text_bytes(content)
+            result = analyze_resume_service(resume_text=resume_text)
+        except Exception as exc:
+            update_recommendation_request_status(
+                request_id=request_id,
+                status="failed",
+                notes=f"Resume analysis failed: {exc}",
+            )
+            raise
+        update_recommendation_request_status(
+            request_id=request_id,
+            status="done",
+            notes=result.get("summary", "Resume analysis completed."),
+        )
+        return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -492,8 +561,7 @@ async def api_jobs_discover(
         "created_at": time.time(),
     }
 
-    if kafka_enabled():
-        publish_json(TOPIC_JOB_SCRAPE_REQUESTED, payload, key=keywords)
+    if _dispatch_kafka_event(TOPIC_JOB_SCRAPE_REQUESTED, payload, key=str(request_id)):
         return {
             "status": "queued",
             "message": f"Job discovery task queued asynchronously for '{keywords}'.",
@@ -502,13 +570,27 @@ async def api_jobs_discover(
 
     from src.scrapers.orchestrator import HTTP_SOURCES
     sources = [source] if source else HTTP_SOURCES
-    return discover_jobs_service(
-        keywords=keywords,
-        location=location or "remote",
-        sources=sources,
-        max_results_per_source=max(1, int(max_results_per_source)),
-        save_to_db=bool(save_to_db),
+    try:
+        result = discover_jobs_service(
+            keywords=keywords,
+            location=location or "remote",
+            sources=sources,
+            max_results_per_source=max(1, int(max_results_per_source)),
+            save_to_db=bool(save_to_db),
+        )
+    except Exception as exc:
+        update_recommendation_request_status(
+            request_id=request_id,
+            status="failed",
+            notes=f"Job discovery failed: {exc}",
+        )
+        raise
+    update_recommendation_request_status(
+        request_id=request_id,
+        status="done",
+        notes=result.get("summary", "Job discovery completed."),
     )
+    return result
 
 
 @app.post("/jobs/discover")
@@ -689,14 +771,31 @@ async def api_recommendations_run(payload: dict) -> dict[str, object]:
             "is_standalone": True,
             "created_at": time.time(),
         }
-        if kafka_enabled():
-            publish_json(TOPIC_RECOMMENDATION_REQUESTED, kafka_payload, key=str(request_id))
+        if _dispatch_kafka_event(
+            TOPIC_RECOMMENDATION_REQUESTED,
+            kafka_payload,
+            key=str(request_id),
+        ):
             return {
                 "status": "queued",
                 "summary": "Recommendation plan queued asynchronously via Event Hubs.",
                 "data": kafka_payload,
             }
-        return recommend_service_plan(payload)
+        try:
+            result = recommend_service_plan(payload)
+        except Exception as exc:
+            update_recommendation_request_status(
+                request_id=request_id,
+                status="failed",
+                notes=f"Recommendation plan failed: {exc}",
+            )
+            raise
+        update_recommendation_request_status(
+            request_id=request_id,
+            status="done",
+            notes=f"Recommendation plan {result.get('status', 'completed')}.",
+        )
+        return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

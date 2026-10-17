@@ -299,7 +299,18 @@ def process_requests() -> int:
         )
 
     limit = int(os.environ.get("RECOMMENDATION_REQUEST_BATCH_SIZE", "50") or "50")
-    requests = get_recommendation_requests_by_status(status=None, limit=limit)
+    # Process only pending work. Fetching status=None re-ran every historical
+    # request on each scheduled invocation, including completed requests.
+    requests = get_recommendation_requests_by_status(status="queued", limit=limit)
+    # Resume-only and inline-plan requests are handled by their dedicated
+    # Kafka stages/direct API paths; this batch runner requires an S3 resume
+    # and a job-search role.
+    requests = [
+        row
+        for row in requests
+        if str(row.get("resume_stored_path") or "").startswith("s3://")
+        and str(row.get("requested_role") or "").strip().lower() != "general analysis"
+    ]
 
     if not requests:
         print("No recommendation requests found.")

@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS job_recommendation_requests (
     resume_stored_path     TEXT        NOT NULL,
     status                 TEXT        NOT NULL DEFAULT 'queued', -- queued | processing | done | failed
     notes                  TEXT        NOT NULL DEFAULT '',
+    analysis_result        JSONB,
     created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
@@ -147,6 +148,9 @@ CREATE TABLE IF NOT EXISTS job_recommendation_requests (
     CONSTRAINT chk_recommendation_requests_role_not_empty
         CHECK (requested_role <> '' AND requested_role IS NOT NULL)
 );
+
+ALTER TABLE IF EXISTS job_recommendation_requests
+    ADD COLUMN IF NOT EXISTS analysis_result JSONB;
 
 CREATE INDEX IF NOT EXISTS idx_recommendation_requests_status_created
     ON job_recommendation_requests (status, created_at DESC);

@@ -704,7 +704,7 @@ def get_recommendation_request_by_id(request_id: int) -> dict | None:
         return conn.execute(
             """
             SELECT id, email, requested_role, requested_roles, resume_original_name,
-                   resume_stored_path, status, notes, created_at, updated_at
+                   resume_stored_path, status, notes, analysis_result, created_at, updated_at
             FROM job_recommendation_requests
             WHERE id = %(id)s
             """,
@@ -717,6 +717,7 @@ def update_recommendation_request_status(
     request_id: int,
     status: str,
     notes: str = "",
+    analysis_result: dict | None = None,
 ) -> int:
     """Update recommendation request status and notes."""
     normalized_status = (status or "").strip().lower()
@@ -728,6 +729,7 @@ def update_recommendation_request_status(
         UPDATE job_recommendation_requests
         SET status = %(status)s,
             notes = %(notes)s,
+            analysis_result = COALESCE(%(analysis_result)s, analysis_result),
             updated_at = NOW()
         WHERE id = %(request_id)s
     """
@@ -735,6 +737,7 @@ def update_recommendation_request_status(
         "request_id": int(request_id),
         "status": normalized_status,
         "notes": (notes or "")[:2000],
+        "analysis_result": Jsonb(analysis_result) if analysis_result is not None else None,
     }
     with _conn() as conn:
         cur = conn.execute(sql, params)

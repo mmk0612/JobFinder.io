@@ -563,7 +563,23 @@ Top gaps: {gaps}
 
 
 def recommend_service_plan(context: dict[str, Any]) -> dict[str, Any]:
-    intent = str(context.get("intent") or "auto").strip() or "auto"
+    if not isinstance(context, dict):
+        raise ValueError("Recommendation context must be a dictionary.")
+
+    requested_intent = str(context.get("intent") or "auto").strip().lower() or "auto"
+    intent_aliases = {
+        "resume_analysis": "analyze_resume",
+        "job_discovery": "discover_jobs",
+        "company_research": "research_company",
+        "application_tracker": "track_application",
+        "resume_tailoring": "tailor_resume",
+        "ats_optimization": "optimize_ats",
+        "interview_prep": "prepare_interview",
+        "career_coach": "career_coaching",
+        "recommendation_plan": "auto",
+    }
+    intent = intent_aliases.get(requested_intent, requested_intent)
+
     outputs: dict[str, Any] = {}
     next_actions: list[str] = []
 
@@ -631,7 +647,7 @@ def recommend_service_plan(context: dict[str, Any]) -> dict[str, Any]:
             job_title=context.get("job_title"),
             use_llm=bool(context.get("use_llm", False)),
         )
-    elif intent == "prepare_interview" or intent == "interview_prep":
+    elif intent == "prepare_interview":
         resume = context.get("structured_resume")
         if not isinstance(resume, dict):
             raise ValueError("structured_resume is required for interview prep.")
@@ -643,7 +659,7 @@ def recommend_service_plan(context: dict[str, Any]) -> dict[str, Any]:
             job_title=context.get("job_title"),
             use_llm=bool(context.get("use_llm", False)),
         )
-    elif intent == "career_coaching" or intent == "career_coach":
+    elif intent == "career_coaching":
         resume = context.get("structured_resume")
         if not isinstance(resume, dict):
             raise ValueError("structured_resume is required for career coaching.")
@@ -652,6 +668,13 @@ def recommend_service_plan(context: dict[str, Any]) -> dict[str, Any]:
             source=str(context.get("source") or "").strip() or None,
             use_llm=bool(context.get("use_llm", False)),
             market_sample_limit=int(context.get("career_market_sample_limit", 400)),
+        )
+
+    elif intent != "auto":
+        supported = sorted({"auto", *intent_aliases.keys(), "analyze_resume", "discover_jobs", "research_company", "track_application", "tailor_resume", "optimize_ats", "prepare_interview", "career_coaching"})
+        raise ValueError(
+            f"Unknown recommendation intent '{requested_intent}'. "
+            f"Supported intents: {', '.join(supported)}."
         )
 
     for value in outputs.values():
@@ -670,6 +693,7 @@ def recommend_service_plan(context: dict[str, Any]) -> dict[str, Any]:
             "ats_optimization",
             "interview_prep",
             "career_coach",
+            "recommendation_plan",
         ],
         "outputs": outputs,
         "next_actions": list(dict.fromkeys(next_actions)),

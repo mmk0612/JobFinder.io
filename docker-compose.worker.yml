@@ -1,0 +1,12 @@
+services:
+  jobfinder-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    env_file:
+      - .env.worker
+    environment:
+      PYTHONUNBUFFERED: "1"
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s

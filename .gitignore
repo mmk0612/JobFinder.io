@@ -1,4 +1,5 @@
 .env
+.env.worker
 .venv/
 output/
 __pycache__/

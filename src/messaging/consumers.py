@@ -69,8 +69,25 @@ def _get_consumer(topics: list[str]):
         sasl_plain_password=config.sasl_password,
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
         auto_offset_reset="earliest",
-        enable_auto_commit=True,
+        # A stage may run for minutes. Commit only after the handler returns so
+        # an unexpected worker crash leaves the event available for retry.
+        enable_auto_commit=False,
     )
+
+
+def _commit_message(consumer, message) -> None:
+    # KafkaConsumer may have prefetched later messages. Commit just this
+    # completed record so a crash cannot skip unhandled events in the batch.
+    from kafka import TopicPartition
+    from kafka.structs import OffsetAndMetadata
+
+    partition = TopicPartition(message.topic, message.partition)
+    consumer.commit({partition: OffsetAndMetadata(message.offset + 1, "")})
+
+
+def _publish_next_stage(topic: str, payload: dict[str, Any], request_id: str | int) -> None:
+    if not publish_json(topic, payload, key=str(request_id)):
+        raise RuntimeError(f"Kafka did not publish the next-stage event to {topic!r}.")
 
 
 # ── Step 1: Resume Analysis ──────────────────────────────────────────────────
@@ -107,6 +124,7 @@ def handle_resume_analysis(payload: dict[str, Any]) -> None:
 
             # Analyze resume
             analysis_result = analyze_resume_service(resume_text=resume_text)
+            payload["structured_resume"] = analysis_result["data"]["structured_resume"]
             
             # If this is a standalone resume analysis request, complete here without chaining to scrapers
             is_standalone = payload.get("requested_role") == "General Analysis" or payload.get("is_standalone")
@@ -115,12 +133,13 @@ def handle_resume_analysis(payload: dict[str, Any]) -> None:
                 update_recommendation_request_status(
                     request_id=request_id,
                     status="done",
-                    notes="Resume analysis completed successfully.",
+                    notes=analysis_result.get("summary", "Resume analysis completed successfully."),
+                    analysis_result=analysis_result,
                 )
                 return
 
         logger.info("[%s] Resume analysis completed. Dispatching job scrape.", request_id)
-        publish_json(TOPIC_JOB_SCRAPE_REQUESTED, payload, key=str(request_id))
+        _publish_next_stage(TOPIC_JOB_SCRAPE_REQUESTED, payload, request_id)
 
     except Exception as exc:
         logger.error(f"[%s] Resume analysis failed: %s", request_id, exc)
@@ -151,8 +170,9 @@ def handle_job_scrape(payload: dict[str, Any]) -> None:
         scrape_result = discover_jobs_service(
             keywords=role,
             location=location,
+            sources=payload.get("sources"),
             max_results_per_source=max_results,
-            save_to_db=True,
+            save_to_db=bool(payload.get("save_to_db", True)),
         )
         logger.info(f"[%s] Job scrape completed: %s", request_id, scrape_result["summary"])
         
@@ -168,7 +188,7 @@ def handle_job_scrape(payload: dict[str, Any]) -> None:
             return
 
         # Dispatch to job-processing-requested for full pipeline
-        publish_json(TOPIC_JOB_PROCESSING_REQUESTED, payload, key=str(request_id))
+        _publish_next_stage(TOPIC_JOB_PROCESSING_REQUESTED, payload, request_id)
 
     except Exception as exc:
         logger.error(f"[%s] Job scrape failed: %s", request_id, exc)
@@ -202,7 +222,7 @@ def handle_job_processing(payload: dict[str, Any]) -> None:
         indexed = rebuild_job_index(index_dir="output/job_index")
         logger.info(f"[%s] Job index rebuilt with %s vectors", request_id, indexed)
 
-        publish_json("job-matching-requested", payload, key=str(request_id))
+        _publish_next_stage(TOPIC_JOB_MATCHING_REQUESTED, payload, request_id)
 
     except Exception as exc:
         logger.error(f"[%s] Job processing failed: %s", request_id, exc)
@@ -251,9 +271,10 @@ def handle_job_matching(payload: dict[str, Any]) -> None:
             embeddings=embeddings,
             job_keyword=role,
         )
+        payload["match_results"] = match_results
 
         logger.info(f"[%s] Matching completed successfully", request_id)
-        publish_json(TOPIC_RECOMMENDATION_REQUESTED, payload, key=str(request_id))
+        _publish_next_stage(TOPIC_RECOMMENDATION_REQUESTED, payload, request_id)
 
     except Exception as exc:
         logger.error(f"[%s] Matching failed: %s", request_id, exc)
@@ -283,9 +304,9 @@ def handle_recommendation(payload: dict[str, Any]) -> None:
         resume_json = out_dir / "structured_resume.json"
         resume_embeddings = resume_json.with_suffix(".embeddings.npz")
 
-        if payload.get("context") or not resume_json.exists():
+        if "context" in payload:
             from src.services.jobfinder_services import recommend_service_plan
-            ctx = payload.get("context") or {"keywords": role, "email": email}
+            ctx = payload.get("context") or {}
             result = recommend_service_plan(ctx)
             logger.info("[%s] Recommendation plan executed successfully", request_id)
             if isinstance(request_id, int) or str(request_id).isdigit():
@@ -295,6 +316,25 @@ def handle_recommendation(payload: dict[str, Any]) -> None:
                     notes=result.get("summary") or "Recommendation plan executed successfully.",
                 )
             return
+
+        if not resume_json.exists():
+            structured_resume = payload.get("structured_resume")
+            if not isinstance(structured_resume, dict):
+                raise FileNotFoundError(
+                    f"Missing resume artifact for request {request_id}, and no structured resume was carried forward."
+                )
+            from src.embedder import generate_embeddings
+
+            out_dir.mkdir(parents=True, exist_ok=True)
+            resume_json.write_text(json.dumps(structured_resume), encoding="utf-8")
+            embeddings = generate_embeddings(structured_resume)
+            import numpy as np
+
+            np.savez(
+                resume_embeddings,
+                skills_embedding=embeddings["skills_embedding"],
+                profile_embedding=embeddings["profile_embedding"],
+            )
 
         # Run notify.py logic for full pipeline
         import subprocess
@@ -354,25 +394,33 @@ def run_consumer(topics: list[str] | None = None) -> None:
     apply_schema()
     consumer = _get_consumer(topics)
 
-    for message in consumer:
-        topic = message.topic
-        payload = message.value
-        handler = handlers.get(topic)
-        if not handler:
-            logger.warning("No handler registered for topic '%s'", topic)
-            continue
-        try:
-            req_id = payload.get("request_id", "unknown")
-            logger.info("Received event from topic '%s' for request_id=%s", topic, req_id)
-            log_pipeline_event(
-                request_id=req_id,
-                topic=topic,
-                event_type=str(payload.get("event_type") or topic),
-                payload=payload,
-            )
-            handler(payload)
-        except Exception as exc:
-            logger.error("Unexpected error handling event from topic '%s': %s", topic, exc)
+    try:
+        for message in consumer:
+            topic = message.topic
+            payload = message.value
+            handler = handlers.get(topic)
+            if not handler:
+                logger.warning("No handler registered for topic '%s'", topic)
+                _commit_message(consumer, message)
+                continue
+            try:
+                req_id = payload.get("request_id", "unknown")
+                logger.info("Received event from topic '%s' for request_id=%s", topic, req_id)
+                log_pipeline_event(
+                    request_id=req_id,
+                    topic=topic,
+                    event_type=str(payload.get("event_type") or topic),
+                    payload=payload,
+                )
+                handler(payload)
+            except Exception:
+                logger.exception("Unexpected error handling event from topic '%s'", topic)
+                # Do not commit: the broker can redeliver the event after restart.
+                raise
+            else:
+                _commit_message(consumer, message)
+    finally:
+        consumer.close()
 
 
 if __name__ == "__main__":
