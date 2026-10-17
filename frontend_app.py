@@ -112,6 +112,109 @@ def _pretty(payload: dict) -> str:
     return html.escape(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
 
 
+def _render_company_research(result: dict) -> str:
+    research = (result.get("data") or {}).get("company_research") or {}
+    brief = research.get("research_brief") or {}
+    if not isinstance(brief, dict):
+        brief = {}
+    local = research.get("local_hiring_data") or {}
+
+    def esc(value: object) -> str:
+        return html.escape(str(value or ""))
+
+    def bullet_section(title: str, values: object) -> str:
+        items = values if isinstance(values, list) else []
+        if not items:
+            return ""
+        rendered = "".join(f"<li>{esc(item)}</li>" for item in items if not isinstance(item, dict))
+        if not rendered:
+            return ""
+        return f'<section class="card"><h2>{esc(title)}</h2><ul>{rendered}</ul></section>'
+
+    def interview_section() -> str:
+        items = brief.get("interview_priorities") or []
+        if not isinstance(items, list) or not items:
+            return ""
+        cards = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            cards.append(
+                '<article class="card"><h3>' + esc(item.get("theme")) + '</h3>'
+                + f'<p>{esc(item.get("why_it_matters"))}</p>'
+                + f'<p><strong>Practice:</strong> {esc(item.get("sample_question"))}</p>'
+                + f'<p><strong>Prepare:</strong> {esc(item.get("story_to_prepare"))}</p></article>'
+            )
+        return f'<section class="card"><h2>Interview preparation</h2><div class="grid">{"".join(cards)}</div></section>' if cards else ""
+
+    def plan_section() -> str:
+        items = brief.get("application_plan") or []
+        if not isinstance(items, list) or not items:
+            return ""
+        cards = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            actions = item.get("actions") if isinstance(item.get("actions"), list) else []
+            actions_html = "".join(f"<li>{esc(action)}</li>" for action in actions)
+            cards.append(
+                '<article class="card"><h3>' + esc(item.get("phase")) + '</h3>'
+                + f'<ul>{actions_html}</ul><p><strong>Deliverable:</strong> {esc(item.get("deliverable"))}</p></article>'
+            )
+        return f'<section class="card"><h2>Application plan</h2><div class="grid">{"".join(cards)}</div></section>' if cards else ""
+
+    def evidence_section() -> str:
+        evidence = research.get("current_evidence") or []
+        observations = brief.get("current_observations") or []
+        cards = []
+        for item in evidence if isinstance(evidence, list) else []:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "")
+            link = f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(item.get("title"))} ↗</a>' if url.startswith("https://") else esc(item.get("title"))
+            cards.append(f'<li><strong>{esc(item.get("id"))}</strong> {link}<br><small>{esc(item.get("publisher"))} · {esc(item.get("published"))}</small></li>')
+        observation_html = "".join(f'<li>{esc(item.get("observation"))} <small>({esc(", ".join(item.get("evidence_ids", [])) if isinstance(item.get("evidence_ids"), list) else "")})</small><br>{esc(item.get("candidate_relevance"))}</li>' for item in observations if isinstance(item, dict)) if isinstance(observations, list) else ""
+        if not cards and not observation_html:
+            return '<section class="card"><h2>Current coverage</h2><p>No dated coverage could be retrieved for this run. Verify current priorities from the official sources below.</p></section>'
+        sources = f'<h3>Retrieved coverage (secondary sources)</h3><ul>{"".join(cards)}</ul>' if cards else ""
+        notes = f'<h3>What it may mean for applicants</h3><ul>{observation_html}</ul>' if observation_html else ""
+        return f'<section class="card"><h2>Recent coverage</h2><p>Coverage search results are leads; confirm time-sensitive claims with official company sources.</p>{sources}{notes}</section>'
+
+    source_links = research.get("research_links") or []
+    links_html = "".join(
+        f'<a class="pill" href="{esc(item.get("url"))}" target="_blank" rel="noopener noreferrer">{esc(item.get("label"))} ↗</a>'
+        for item in source_links if isinstance(item, dict) and str(item.get("url", "")).startswith("https://")
+    ) if isinstance(source_links, list) else ""
+    local_count = local.get("open_roles_count", 0)
+    local_signal = local.get("signal", "unknown")
+    warning = (
+        '<div class="status">The AI research brief could not be generated. The plan below is a starter checklist; verify company details from official sources.</div>'
+        if research.get("research_status") == "limited" else ""
+    )
+
+    return f'''
+    <div class="card company-report">
+      <p><strong>Company Research · {esc(research.get("research_date"))}</strong></p>
+      <h2>{esc(research.get("company"))}</h2>
+      <p>{esc(brief.get("company_overview") or research.get("research_basis"))}</p>
+      <div class="status">JobFinder local data: {esc(local_count)} matching saved roles · hiring signal: {esc(local_signal)}. {esc(local.get("coverage_note"))}</div>
+      {warning}
+    </div>
+    <div class="grid" style="margin-top:18px">
+      {bullet_section("Business areas", brief.get("business_areas"))}
+      {bullet_section("Strategic context", brief.get("strategic_context"))}
+      {evidence_section()}
+      {bullet_section("What this means for your target role", brief.get("role_relevance"))}
+      {bullet_section("How to position your application", brief.get("candidate_positioning"))}
+      {interview_section()}
+      {plan_section()}
+      {bullet_section("Risks and unknowns", brief.get("risks_and_unknowns"))}
+      {bullet_section("Verify before applying", brief.get("facts_to_verify"))}
+    </div>
+    <div class="card" style="margin-top:18px"><h2>Research links</h2><p>Use these searches to check current details against official company sources.</p><div class="links">{links_html}</div></div>
+    '''
+
+
 def _page_shell(title: str, body: str) -> str:
     return f"""<!doctype html>
 <html lang="en">
@@ -235,7 +338,10 @@ def _render_home(message: str | None = None, error: str | None = None, result: d
 
     result_block = ""
     if result is not None:
-        result_block = f'<div class="card"><h2>Result</h2><pre>{_pretty(result)}</pre></div>'
+        if isinstance((result.get("data") or {}).get("company_research"), dict):
+            result_block = _render_company_research(result)
+        else:
+            result_block = f'<div class="card"><h2>Result</h2><pre>{_pretty(result)}</pre></div>'
 
     body = f"""
     {status_block}
@@ -665,7 +771,7 @@ async def api_company_research(
     company: str = Form(...),
     target_job_url: str | None = Form(None),
     source: str | None = Form(None),
-    use_llm: bool = Form(False),
+    use_llm: bool = Form(True),
 ) -> dict[str, object]:
     return research_company_service(
         company=company,
@@ -680,7 +786,7 @@ async def company_research_html(
     company: str = Form(...),
     target_job_url: str | None = Form(None),
     source: str | None = Form(None),
-    use_llm: bool = Form(False),
+    use_llm: bool = Form(True),
 ) -> HTMLResponse:
     try:
         result = await api_company_research(company=company, target_job_url=target_job_url, source=source, use_llm=use_llm)
