@@ -394,7 +394,7 @@ def _render_home(message: str | None = None, error: str | None = None, result: d
       </div>
 
       <div class="card">
-        <h2>Company Service</h2>
+        <h2 id="company-service">Company Service</h2>
         <form action="/company/research" method="post">
           <div class="field"><label>Company</label><input name="company" placeholder="Google" required /></div>
           <div class="field"><label>Target role</label><input name="target_role" placeholder="Software Engineer" required /></div>
@@ -797,6 +797,12 @@ async def api_company_research(
     )
 
 
+@app.get("/company/research")
+def company_research_form() -> RedirectResponse:
+    """The research endpoint consumes form data; direct links should open the form."""
+    return RedirectResponse(url="/#company-service", status_code=303)
+
+
 @app.post("/company/research", response_class=HTMLResponse)
 async def company_research_html(
     company: str = Form(...),
@@ -811,6 +817,8 @@ async def company_research_html(
         return _render_home(message=result["summary"], result=result)
     except HTTPException as exc:
         return _render_home(error=str(exc.detail))
+    except Exception as exc:
+        return _render_home(error=f"Company research failed: {str(exc)[:240]}")
 
 
 @app.post("/api/applications/track")

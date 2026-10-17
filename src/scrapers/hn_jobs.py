@@ -14,14 +14,14 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from src.scrapers.base import BaseScraper
 from src.scrapers.models import JobListing
 
 logger = logging.getLogger(__name__)
 
-_ALGOLIA_URL = "https://hn.algolia.com/api/v1/search"
+_ALGOLIA_URL = "https://hn.algolia.com/api/v1/search_by_date"
 _HN_ITEM_URL = "https://news.ycombinator.com/item?id={}"
 
 
@@ -38,11 +38,13 @@ class HNJobsScraper(BaseScraper):
         jobs: list[JobListing] = []
         page = 0
         hits_per_page = min(max_results, 50)
+        posted_after = int((datetime.now(timezone.utc) - timedelta(days=30)).timestamp())
 
         while len(jobs) < max_results:
             params = {
                 "query":        keywords,
                 "tags":         "job",
+                "numericFilters": f"created_at_i>{posted_after}",
                 "hitsPerPage":  hits_per_page,
                 "page":         page,
             }
