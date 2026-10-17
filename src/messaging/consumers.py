@@ -399,12 +399,26 @@ def run_consumer(topics: list[str] | None = None) -> None:
             topic = message.topic
             payload = message.value
             handler = handlers.get(topic)
+            if not isinstance(payload, dict):
+                logger.error(
+                    "Skipping malformed event from topic '%s': expected a JSON object",
+                    topic,
+                )
+                _commit_message(consumer, message)
+                continue
+            req_id = payload.get("request_id")
+            if req_id is None or not str(req_id).strip():
+                logger.error(
+                    "Skipping malformed event from topic '%s': missing request_id",
+                    topic,
+                )
+                _commit_message(consumer, message)
+                continue
             if not handler:
                 logger.warning("No handler registered for topic '%s'", topic)
                 _commit_message(consumer, message)
                 continue
             try:
-                req_id = payload.get("request_id", "unknown")
                 logger.info("Received event from topic '%s' for request_id=%s", topic, req_id)
                 log_pipeline_event(
                     request_id=req_id,
