@@ -40,8 +40,8 @@ if not _provider_raw:
     _provider_raw = "nvidia" if os.environ.get("NVIDIA_API_KEY", "").strip() else "local"
 EMBEDDING_PROVIDER = _provider_raw
 NVIDIA_EMBEDDING_MODEL = (
-    os.environ.get("NVIDIA_EMBEDDING_MODEL", "nvidia/embed-qa-4").strip()
-    or "nvidia/embed-qa-4"
+    os.environ.get("NVIDIA_EMBEDDING_MODEL", "nvidia/nemotron-3-embed-1b").strip()
+    or "nvidia/nemotron-3-embed-1b"
 )
 NVIDIA_BASE_URL = os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").strip() or "https://integrate.api.nvidia.com/v1"
 NVIDIA_EMBEDDING_TIMEOUT_SECONDS = float(
@@ -49,7 +49,7 @@ NVIDIA_EMBEDDING_TIMEOUT_SECONDS = float(
 )
 NVIDIA_QUERY_INPUT_TYPE = os.environ.get("NVIDIA_QUERY_INPUT_TYPE", "query").strip() or "query"
 NVIDIA_PASSAGE_INPUT_TYPE = os.environ.get("NVIDIA_PASSAGE_INPUT_TYPE", "passage").strip() or "passage"
-FIXED_EMBEDDING_DIM = max(1, int(os.environ.get("EMBEDDING_DIM", "768") or "768"))
+FIXED_EMBEDDING_DIM = max(1, int(os.environ.get("EMBEDDING_DIM", "2048") or "2048"))
 NVIDIA_EMBEDDING_MAX_WORDS = max(
     32,
     int(os.environ.get("NVIDIA_EMBEDDING_MAX_WORDS", "420") or "420"),
