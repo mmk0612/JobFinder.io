@@ -247,7 +247,8 @@ def handle_job_matching(payload: dict[str, Any]) -> None:
 
     try:
         from src.embedder import generate_embeddings
-        from src.matcher import match_resume_to_jobs
+        from src.db.db import get_matchable_jobs
+        from src.matcher import rank_jobs_for_resume
 
         structured_resume = payload.get("structured_resume") or {}
         embeddings = generate_embeddings(structured_resume)
@@ -266,12 +267,14 @@ def handle_job_matching(payload: dict[str, Any]) -> None:
             profile_embedding=embeddings["profile_embedding"],
         )
 
-        match_results = match_resume_to_jobs(
+        job_rows = get_matchable_jobs(limit=5000)
+        ranked = rank_jobs_for_resume(
             structured_resume=structured_resume,
-            embeddings=embeddings,
-            job_keyword=role,
+            resume_embedding=embeddings["profile_embedding"],
+            job_rows=job_rows,
+            top_k=20,
         )
-        payload["match_results"] = match_results
+        payload["match_results"] = [result.to_dict() for result in ranked]
 
         logger.info(f"[%s] Matching completed successfully", request_id)
         _publish_next_stage(TOPIC_RECOMMENDATION_REQUESTED, payload, request_id)
