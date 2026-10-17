@@ -599,7 +599,12 @@ def status_page(req_id: str) -> HTMLResponse:
         '<section class="card" style="margin-top:18px"><h2>Discovered Jobs '
         f'({len(job_cards)})</h2><div class="grid" style="margin-top:14px">{"".join(job_cards)}</div></section>'
         if job_cards
-        else ""
+        else (
+            '<section class="card" style="margin-top:18px"><h2>Discovered Jobs (0 current)</h2>'
+            '<p>No listings met the freshness and location filters. JobFinder only displays jobs with a verified posting or update date within the last 30 days and a matching location. Try a broader role or location.</p></section>'
+            if row and row.get("email") == "discovery-request@example.com"
+            else ""
+        )
     )
 
     body = f"""
