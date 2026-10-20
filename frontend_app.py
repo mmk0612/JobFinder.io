@@ -404,16 +404,6 @@ def _render_home(message: str | None = None, error: str | None = None, result: d
         </form>
       </div>
 
-      <div class="card">
-        <h2>Application Service</h2>
-        <form action="/applications/track" method="post">
-          <div class="field"><label>Email</label><input name="email" type="email" placeholder="name@example.com" required /></div>
-          <div class="field"><label>Action</label><select name="application_action"><option value="list">list</option><option value="track">track</option><option value="update">update</option></select></div>
-          <div class="field"><label>Target job URL</label><input name="target_job_url" placeholder="https://..." /></div>
-          <div class="field"><label>Status</label><input name="application_status" placeholder="saved" /></div>
-          <button class="button" type="submit">Update application</button>
-        </form>
-      </div>
     </div>
     {result_block}
     """
