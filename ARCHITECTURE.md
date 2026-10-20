@@ -7,7 +7,7 @@ flowchart LR
   U[User / Browser / API client] --> FE[frontend_app.py\nFastAPI service]
   FE --> PG[(PostgreSQL)]
   FE --> S3[(S3 resumes / artifacts)]
-  FE --> RS[Recommendation Service\nresume analysis / jobs / research / applications]
+  FE --> RS[Recommendation Service\nresume analysis / jobs / research / career support]
 
   RS --> PG
   RS --> S3

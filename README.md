@@ -108,7 +108,6 @@ Available services include:
 - `resume_analysis`
 - `job_discovery`
 - `company_research`
-- `application_tracker`
 - `resume_tailoring`
 - `ats_optimization`
 - `interview_prep`

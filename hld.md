@@ -11,7 +11,7 @@ flowchart TD
     U[User / Browser / API client] --> FE[FastAPI frontend\nfrontend_app.py]
     FE --> PG[(PostgreSQL)]
     FE --> S3[(S3 resumes / artifacts)]
-    FE --> R[Recommendation Service\nresume analysis / jobs / research / applications]
+    FE --> R[Recommendation Service\nresume analysis / jobs / research / career support]
     R --> PG
     R --> S3
 
@@ -71,7 +71,7 @@ flowchart TD
 
 ## 5. Storage Model
 
-- PostgreSQL is the source of truth for jobs, request state, applications, and processing metadata.
+- PostgreSQL is the source of truth for jobs, request state, and processing metadata. Legacy application records are retained but are no longer exposed through the app.
 - S3 stores uploaded resumes and large generated artifacts.
 - FAISS indices remain file-backed artifacts under `output/`.
 - Kafka is a transport layer, not a source of truth.
