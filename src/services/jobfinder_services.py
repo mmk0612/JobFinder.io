@@ -20,6 +20,9 @@ import requests
 from src.db.db import (
     get_job_by_url,
     get_matchable_jobs,
+    list_application_records,
+    update_application_record_status,
+    upsert_application_record,
 )
 from src.llm_client import call_llm_for_json
 from src.normalizer import normalize_skills
@@ -694,6 +697,7 @@ def recommend_service_plan(context: dict[str, Any]) -> dict[str, Any]:
         "resume_analysis": "analyze_resume",
         "job_discovery": "discover_jobs",
         "company_research": "research_company",
+        "application_tracker": "track_application",
         "resume_tailoring": "tailor_resume",
         "ats_optimization": "optimize_ats",
         "interview_prep": "prepare_interview",
@@ -745,6 +749,8 @@ def recommend_service_plan(context: dict[str, Any]) -> dict[str, Any]:
             limit=int(context.get("company_research_limit", 500)),
             use_llm=bool(context.get("use_llm", True)),
         )
+    elif intent == "track_application":
+        outputs["application_tracker"] = application_tracker_service(context)
     elif intent == "tailor_resume":
         resume = context.get("structured_resume")
         if not isinstance(resume, dict):
@@ -793,7 +799,7 @@ def recommend_service_plan(context: dict[str, Any]) -> dict[str, Any]:
         )
 
     elif intent != "auto":
-        supported = sorted({"auto", *intent_aliases.keys(), "analyze_resume", "discover_jobs", "research_company", "tailor_resume", "optimize_ats", "prepare_interview", "career_coaching"})
+        supported = sorted({"auto", *intent_aliases.keys(), "analyze_resume", "discover_jobs", "research_company", "track_application", "tailor_resume", "optimize_ats", "prepare_interview", "career_coaching"})
         raise ValueError(
             f"Unknown recommendation intent '{requested_intent}'. "
             f"Supported intents: {', '.join(supported)}."
@@ -810,6 +816,7 @@ def recommend_service_plan(context: dict[str, Any]) -> dict[str, Any]:
             "resume_analysis",
             "job_discovery",
             "company_research",
+            "application_tracker",
             "resume_tailoring",
             "ats_optimization",
             "interview_prep",
@@ -819,3 +826,94 @@ def recommend_service_plan(context: dict[str, Any]) -> dict[str, Any]:
         "outputs": outputs,
         "next_actions": list(dict.fromkeys(next_actions)),
     }
+
+
+def application_tracker_service(context: dict[str, Any]) -> dict[str, Any]:
+    action = str(context.get("application_action", "list")).strip().lower()
+
+    if action in {"track", "upsert", "save"}:
+        email = str(context.get("email") or "").strip().lower()
+        if not email:
+            raise ValueError("application tracking requires email.")
+        target_job = _resolve_target_job(context)
+        if not target_job:
+            raise ValueError("application tracking requires resolvable target_job/target_job_url/job_keyword.")
+
+        status = str(context.get("application_status", "saved")).strip().lower() or "saved"
+        follow_up_due_at = _parse_optional_datetime(context.get("follow_up_due_at"))
+        notes = str(context.get("application_notes") or "").strip()
+
+        record_id = upsert_application_record(
+            email=email,
+            job_url=str(target_job.get("url") or ""),
+            company=str(target_job.get("company") or ""),
+            job_title=str(target_job.get("job_title") or ""),
+            status=status,
+            follow_up_due_at=follow_up_due_at,
+            notes=notes,
+        )
+
+        return {
+            "status": "completed",
+            "summary": f"Tracked application record #{record_id} for {email}.",
+            "data": {
+                "application_record_id": record_id,
+                "application_record": {
+                    "email": email,
+                    "status": status,
+                    "follow_up_due_at": follow_up_due_at,
+                    "notes": notes,
+                    "target_job": _compact_job_summary(target_job),
+                },
+            },
+            "next_actions": [
+                "Update status to interviewing/offer/rejected as process moves.",
+                "Set follow_up_due_at for pending recruiter responses.",
+            ],
+        }
+
+    if action in {"update", "update_status"}:
+        record_id_raw = context.get("application_record_id")
+        if record_id_raw is None:
+            raise ValueError("update_status requires application_record_id.")
+        record_id = int(record_id_raw)
+        status = str(context.get("application_status") or "").strip().lower()
+        if not status:
+            raise ValueError("update_status requires application_status.")
+
+        notes = str(context.get("application_notes") or "").strip()
+        follow_up_due_at = _parse_optional_datetime(context.get("follow_up_due_at"))
+        updated = update_application_record_status(
+            record_id=record_id,
+            status=status,
+            notes=notes,
+            follow_up_due_at=follow_up_due_at,
+        )
+        return {
+            "status": "completed",
+            "summary": f"Updated {updated} application record(s) for record_id={record_id}.",
+            "data": {"updated_records": updated},
+            "next_actions": ["List records to confirm next follow-up queue."],
+        }
+
+    if action == "list":
+        email = str(context.get("email") or "").strip().lower() or None
+        status = str(context.get("application_status") or "").strip().lower() or None
+        limit = max(1, int(context.get("application_limit", 50)))
+        records = list_application_records(email=email, status=status, limit=limit)
+        return {
+            "status": "completed",
+            "summary": f"Fetched {len(records)} tracked application record(s).",
+            "data": {"application_records": records},
+            "next_actions": ["Use record_id + update_status to progress each application stage."],
+        }
+
+    raise ValueError("application_action must be one of: list, track, upsert, save, update, update_status.")
+
+
+def _parse_optional_datetime(value: Any) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    datetime.fromisoformat(raw)
+    return raw

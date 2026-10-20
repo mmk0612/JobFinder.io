@@ -16,9 +16,11 @@ from src.db.db import (
     apply_schema,
     create_job_recommendation_request,
     get_job_discovery_results,
+    list_application_records,
 )
 from src.services.jobfinder_services import (
     analyze_resume_service,
+    application_tracker_service,
     ats_optimization_service,
     career_coach_service,
     discover_jobs_service,
@@ -61,6 +63,7 @@ SERVICE_NAMES = [
     "resume_analysis",
     "job_discovery",
     "company_research",
+    "application_tracker",
     "resume_tailoring",
     "ats_optimization",
     "interview_prep",
@@ -401,6 +404,16 @@ def _render_home(message: str | None = None, error: str | None = None, result: d
         </form>
       </div>
 
+      <div class="card">
+        <h2>Application Service</h2>
+        <form action="/applications/track" method="post">
+          <div class="field"><label>Email</label><input name="email" type="email" placeholder="name@example.com" required /></div>
+          <div class="field"><label>Action</label><select name="application_action"><option value="list">list</option><option value="track">track</option><option value="update">update</option></select></div>
+          <div class="field"><label>Target job URL</label><input name="target_job_url" placeholder="https://..." /></div>
+          <div class="field"><label>Status</label><input name="application_status" placeholder="saved" /></div>
+          <button class="button" type="submit">Update application</button>
+        </form>
+      </div>
     </div>
     {result_block}
     """
@@ -847,6 +860,43 @@ async def company_research_html(
         return _render_home(error=str(exc.detail))
     except Exception as exc:
         return _render_home(error=f"Company research failed: {str(exc)[:240]}")
+
+
+@app.post("/api/applications/track")
+async def api_applications_track(payload: dict) -> dict[str, object]:
+    return application_tracker_service(payload)
+
+
+@app.post("/applications/track", response_class=HTMLResponse)
+async def applications_track_html(
+    email: str = Form(...),
+    application_action: str = Form("list"),
+    target_job_url: str | None = Form(None),
+    application_status: str | None = Form(None),
+    application_notes: str | None = Form(None),
+    follow_up_due_at: str | None = Form(None),
+    application_record_id: int | None = Form(None),
+) -> HTMLResponse:
+    payload = {
+        "email": email,
+        "application_action": application_action,
+        "target_job_url": target_job_url,
+        "application_status": application_status,
+        "application_notes": application_notes,
+        "follow_up_due_at": follow_up_due_at,
+        "application_record_id": application_record_id,
+    }
+    try:
+        result = application_tracker_service(payload)
+        return _render_home(message=result["summary"], result=result)
+    except Exception as exc:
+        return _render_home(error=str(exc))
+
+
+@app.get("/api/applications")
+def api_list_applications(email: str | None = None, status: str | None = None, limit: int = 50) -> dict[str, object]:
+    records = list_application_records(email=email, status=status, limit=max(1, int(limit)))
+    return {"status": "completed", "data": {"application_records": records}}
 
 
 @app.post("/api/resume/tailor")
