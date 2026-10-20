@@ -37,6 +37,7 @@ from src.db.db import (
     update_recommendation_request_status,
 )
 from src.messaging.kafka_bus import (
+    TOPIC_COMPANY_RESEARCH_REQUESTED,
     TOPIC_JOB_MATCHING_REQUESTED,
     TOPIC_JOB_PROCESSING_REQUESTED,
     TOPIC_JOB_SCRAPE_REQUESTED,
@@ -48,6 +49,7 @@ from src.messaging.kafka_bus import (
 from src.services.jobfinder_services import (
     analyze_resume_service,
     discover_jobs_service,
+    research_company_service,
 )
 from src.storage.s3_storage import download_s3_uri_to_path, parse_s3_uri
 
@@ -147,6 +149,41 @@ def handle_resume_analysis(payload: dict[str, Any]) -> None:
             request_id=request_id,
             status="failed",
             notes=f"Resume analysis failed: {exc}",
+        )
+
+
+def handle_company_research(payload: dict[str, Any]) -> None:
+    request_id = payload["request_id"]
+    company = str(payload.get("company") or "").strip()
+    logger.info("[%s] Starting company research for %s", request_id, company)
+    update_recommendation_request_status(
+        request_id=request_id,
+        status="processing",
+        notes=f"Researching {company} and preparing the application plan...",
+    )
+
+    try:
+        result = research_company_service(
+            company=company,
+            target_role=payload.get("target_role"),
+            target_location=payload.get("target_location"),
+            target_job_url=payload.get("target_job_url"),
+            source=payload.get("source"),
+            use_llm=bool(payload.get("use_llm", True)),
+        )
+        update_recommendation_request_status(
+            request_id=request_id,
+            status="done",
+            notes=result.get("summary", f"Company research completed for {company}."),
+            analysis_result=result,
+        )
+        logger.info("[%s] Company research completed for %s", request_id, company)
+    except Exception as exc:
+        logger.exception("[%s] Company research failed for %s", request_id, company)
+        update_recommendation_request_status(
+            request_id=request_id,
+            status="failed",
+            notes=f"Company research failed: {exc}",
         )
 
 
@@ -384,6 +421,7 @@ def handle_recommendation(payload: dict[str, Any]) -> None:
 
 def run_consumer(topics: list[str] | None = None) -> None:
     handlers = {
+        TOPIC_COMPANY_RESEARCH_REQUESTED: handle_company_research,
         TOPIC_RESUME_ANALYSIS_REQUESTED: handle_resume_analysis,
         TOPIC_JOB_SCRAPE_REQUESTED: handle_job_scrape,
         TOPIC_JOB_PROCESSING_REQUESTED: handle_job_processing,

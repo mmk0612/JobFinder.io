@@ -25,13 +25,14 @@ from src.services.jobfinder_services import (
     career_coach_service,
     discover_jobs_service,
     recommend_service_plan,
-    research_company_service,
     tailor_resume_service,
     interview_prep_service,
 )
 import time
+from uuid import uuid4
 from src.storage.s3_storage import upload_resume_bytes
 from src.messaging.kafka_bus import (
+    TOPIC_COMPANY_RESEARCH_REQUESTED,
     TOPIC_RECOMMENDATION_REQUESTED,
     TOPIC_RESUME_ANALYSIS_REQUESTED,
     TOPIC_JOB_SCRAPE_REQUESTED,
@@ -557,11 +558,16 @@ def status_page(req_id: str) -> HTMLResponse:
             analysis = json.loads(analysis)
         except json.JSONDecodeError:
             analysis = None
-    analysis_block = (
-        f'<div class="card" style="margin-top:18px"><h2>Resume Analysis</h2><p>{html.escape(str(analysis.get("summary") or "Analysis complete."))}</p><pre>{_pretty(analysis.get("data") or analysis)}</pre></div>'
-        if isinstance(analysis, dict)
-        else ("<div class=\"status\">Your resume analysis will appear here when processing completes.</div>" if status_text in {"queued", "processing"} else "")
-    )
+    is_company_research = bool(row and row.get("resume_original_name") == "__company_research__")
+    if is_company_research and isinstance(analysis, dict):
+        analysis_block = _render_company_research(analysis)
+    elif isinstance(analysis, dict):
+        analysis_block = f'<div class="card" style="margin-top:18px"><h2>Resume Analysis</h2><p>{html.escape(str(analysis.get("summary") or "Analysis complete."))}</p><pre>{_pretty(analysis.get("data") or analysis)}</pre></div>'
+    elif status_text in {"queued", "processing"}:
+        pending_text = "Company research is running. Refresh this page for the result." if is_company_research else "Your resume analysis will appear here when processing completes."
+        analysis_block = f'<div class="status">{pending_text}</div>'
+    else:
+        analysis_block = ""
 
     discovery_jobs: list[dict] = []
     if req_id.isdigit():
@@ -787,14 +793,49 @@ async def api_company_research(
     source: str | None = Form(None),
     use_llm: bool = Form(True),
 ) -> dict[str, object]:
-    return research_company_service(
-        company=company,
-        target_role=target_role,
-        target_location=target_location,
-        target_job_url=target_job_url,
-        source=source,
-        use_llm=bool(use_llm),
+    company = company.strip()
+    if not company:
+        raise HTTPException(status_code=400, detail="Company name is required.")
+
+    request_role = (target_role or "").strip() or "Company research"
+    request_id = create_job_recommendation_request(
+        email=f"company-research-{uuid4().hex}@jobfinder.invalid",
+        requested_role=request_role,
+        resume_original_name="__company_research__",
+        resume_stored_path="",
     )
+    update_recommendation_request_status(
+        request_id=request_id,
+        status="queued",
+        notes=f"Company research for {company} is queued.",
+    )
+    payload = {
+        "request_id": request_id,
+        "company": company,
+        "target_role": target_role,
+        "target_location": target_location,
+        "target_job_url": target_job_url,
+        "source": source,
+        "use_llm": bool(use_llm),
+        "created_at": time.time(),
+    }
+    if not _dispatch_kafka_event(TOPIC_COMPANY_RESEARCH_REQUESTED, payload, key=str(request_id)):
+        update_recommendation_request_status(
+            request_id=request_id,
+            status="failed",
+            notes="Company research could not be queued because Kafka is not configured.",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Company research is unavailable because the background worker is not configured.",
+        )
+
+    return {
+        "status": "queued",
+        "summary": f"Company research for {company} has been queued.",
+        "request_id": request_id,
+        "status_url": f"/status/{request_id}",
+    }
 
 
 @app.get("/company/research")
@@ -814,7 +855,7 @@ async def company_research_html(
 ) -> HTMLResponse:
     try:
         result = await api_company_research(company=company, target_role=target_role, target_location=target_location, target_job_url=target_job_url, source=source, use_llm=use_llm)
-        return _render_home(message=result["summary"], result=result)
+        return RedirectResponse(url=result["status_url"], status_code=303)
     except HTTPException as exc:
         return _render_home(error=str(exc.detail))
     except Exception as exc:

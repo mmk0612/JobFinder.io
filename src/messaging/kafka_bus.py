@@ -15,6 +15,7 @@ from typing import Any
 # ── Canonical Topic Names ───────────────────────────────────────────────────
 TOPIC_RESUME_ANALYSIS_REQUESTED  = "resume-analysis-requested"
 TOPIC_RESUME_ANALYSIS_COMPLETED  = "resume-analysis-completed"
+TOPIC_COMPANY_RESEARCH_REQUESTED = "company-research-requested"
 TOPIC_JOB_SCRAPE_REQUESTED        = "job-scrape-requested"
 TOPIC_JOB_SCRAPE_COMPLETED        = "job-scrape-completed"
 TOPIC_JOB_PROCESSING_REQUESTED    = "job-processing-requested"
