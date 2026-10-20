@@ -20,7 +20,7 @@ import requests
 # ── configuration ────────────────────────────────────────────────────────────
 
 _DEFAULT_BASE_URL = os.environ.get("LLM_BASE_URL", "https://integrate.api.nvidia.com/v1").strip() or "https://integrate.api.nvidia.com/v1"
-_DEFAULT_MODEL = os.environ.get("LLM_MODEL", "nvidia/nemotron-3-super-120b-a12b").strip() or "nvidia/nemotron-3-super-120b-a12b"
+_DEFAULT_MODEL = os.environ.get("LLM_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b").strip() or "nvidia/nemotron-3.5-lightning-30b-a3b"
 _MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "5") or "5")
 _RETRY_DELAY = float(os.environ.get("LLM_RETRY_DELAY_SECONDS", "1.5") or "1.5")
 _RATE_LIMIT_RETRY_DELAY = float(os.environ.get("LLM_RATE_LIMIT_RETRY_DELAY_SECONDS", "3.0") or "3.0")
@@ -29,7 +29,7 @@ _REQUEST_TIMEOUT_SECONDS = float(os.environ.get("LLM_REQUEST_TIMEOUT_SECONDS", "
 _TOTAL_TIMEOUT_SECONDS = float(os.environ.get("LLM_TOTAL_TIMEOUT_SECONDS", "180") or "180")
 _DEFAULT_TOP_P = float(os.environ.get("LLM_TOP_P", "0.95") or "0.95")
 _DEFAULT_MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "8192") or "8192")
-_THINKING_ENABLED = os.environ.get("LLM_THINKING", "true").strip().lower() in {"1", "true", "yes", "on"}
+_THINKING_ENABLED = os.environ.get("LLM_THINKING", "false").strip().lower() in {"1", "true", "yes", "on"}
 _SYSTEM_PROMPT = os.environ.get(
     "LLM_SYSTEM_PROMPT",
     "You are a structured API assistant. Return only the final answer with no reasoning trace, no <think> tags, and no hidden chain-of-thought.",
@@ -75,7 +75,7 @@ def _invoke_nvidia_chat(
         "temperature": temperature,
         "top_p": top_p,
         "stream": stream,
-        "chat_template_kwargs": {"thinking": _THINKING_ENABLED},
+        "chat_template_kwargs": {"enable_thinking": _THINKING_ENABLED},
     }
 
     response = requests.post(
@@ -166,6 +166,27 @@ def call_llm(
             )
         except Exception as exc:
             last_err = exc
+            # Invalid model IDs and other permanent client errors will not
+            # recover by retrying. Preserve NVIDIA's short error detail so
+            # misconfiguration is diagnosable from worker logs.
+            if isinstance(exc, requests.HTTPError):
+                response = exc.response
+                status = response.status_code if response is not None else None
+                if status is not None and 400 <= status < 500 and status != 429:
+                    detail = ""
+                    if response is not None:
+                        try:
+                            body = response.json()
+                            error = body.get("error", body) if isinstance(body, dict) else body
+                            detail = json.dumps(error, ensure_ascii=False)
+                        except ValueError:
+                            detail = response.text
+                    key = os.environ.get("NVIDIA_API_KEY", "").strip()
+                    if key:
+                        detail = detail.replace(key, "[REDACTED]")
+                    detail = " ".join(detail.split())[:500]
+                    suffix = f": {detail}" if detail else ""
+                    raise RuntimeError(f"LLM provider returned HTTP {status}{suffix}") from exc
             if attempt < _MAX_RETRIES:
                 err_text = str(exc)
                 is_rate_limited = "429" in err_text or "Too Many Requests" in err_text or "rate limit" in err_text.lower()

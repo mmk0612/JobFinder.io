@@ -83,7 +83,8 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          LLM_MODEL: nvidia/nemotron-3.5-lightning-30b-a3b
+          LLM_THINKING: "false"
           LLM_TOP_P: ${{ secrets.LLM_TOP_P }}
           LLM_MAX_TOKENS: ${{ secrets.LLM_MAX_TOKENS }}
           LLM_REQUEST_TIMEOUT_SECONDS: ${{ secrets.LLM_REQUEST_TIMEOUT_SECONDS }}
@@ -93,6 +94,9 @@ jobs:
           JOB_DISABLE_LLM_SKILL_NORMALIZATION: "true"
 
           JOB_EMBEDDING_MODEL: ${{ secrets.JOB_EMBEDDING_MODEL }}
+          EMBEDDING_PROVIDER: nvidia
+          NVIDIA_BASE_URL: https://integrate.api.nvidia.com/v1
+          NVIDIA_EMBEDDING_MODEL: nvidia/nemotron-3-embed-1b
           JOB_PROCESSING_CONCURRENCY: ${{ secrets.JOB_PROCESSING_CONCURRENCY }}
           JOB_PROCESSING_BACKGROUND: ${{ secrets.JOB_PROCESSING_BACKGROUND }}
           JOB_PROCESSING_QUEUE_POLL_SECONDS: ${{ secrets.JOB_PROCESSING_QUEUE_POLL_SECONDS }}
