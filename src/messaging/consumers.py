@@ -355,6 +355,7 @@ def handle_recommendation(payload: dict[str, Any]) -> None:
                     request_id=int(request_id),
                     status="done",
                     notes=result.get("summary") or "Recommendation plan executed successfully.",
+                    analysis_result=result,
                 )
             return
 

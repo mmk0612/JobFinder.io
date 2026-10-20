@@ -549,12 +549,23 @@ def status_page(req_id: str) -> HTMLResponse:
         except json.JSONDecodeError:
             analysis = None
     is_company_research = bool(row and row.get("resume_original_name") == "__company_research__")
+    is_recommendation_plan = bool(
+        row
+        and row.get("resume_original_name") == "context.json"
+        and row.get("resume_stored_path") == "inline_context"
+    )
     if is_company_research and isinstance(analysis, dict):
         analysis_block = _render_company_research(analysis)
     elif isinstance(analysis, dict):
-        analysis_block = f'<div class="card" style="margin-top:18px"><h2>Resume Analysis</h2><p>{html.escape(str(analysis.get("summary") or "Analysis complete."))}</p><pre>{_pretty(analysis.get("data") or analysis)}</pre></div>'
+        result_title = "Recommendation Plan" if is_recommendation_plan else "Resume Analysis"
+        analysis_block = f'<div class="card" style="margin-top:18px"><h2>{result_title}</h2><p>{html.escape(str(analysis.get("summary") or "Analysis complete."))}</p><pre>{_pretty(analysis.get("data") or analysis)}</pre></div>'
     elif status_text in {"queued", "processing"}:
-        pending_text = "Company research is running. Refresh this page for the result." if is_company_research else "Your resume analysis will appear here when processing completes."
+        if is_company_research:
+            pending_text = "Company research is running. Refresh this page for the result."
+        elif is_recommendation_plan:
+            pending_text = "Your recommendation plan is running. Refresh this page for the result."
+        else:
+            pending_text = "Your resume analysis will appear here when processing completes."
         analysis_block = f'<div class="status">{pending_text}</div>'
     else:
         analysis_block = ""
@@ -1002,7 +1013,9 @@ async def api_recommendations_run(payload: dict) -> dict[str, object]:
             request_id=request_id,
             status="done",
             notes=f"Recommendation plan {result.get('status', 'completed')}.",
+            analysis_result=result,
         )
+        result["request_id"] = request_id
         return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1013,7 +1026,7 @@ async def recommendations_run_html(context_json: str = Form(...)):
     try:
         payload = _parse_json_object(context_json)
         result = await api_recommendations_run(payload)
-        req_id = result.get("data", {}).get("request_id") or f"plan_{int(time.time())}"
+        req_id = result.get("request_id") or result.get("data", {}).get("request_id") or f"plan_{int(time.time())}"
         return RedirectResponse(url=f"/status/{req_id}", status_code=303)
     except (ValueError, json.JSONDecodeError) as exc:
         return _render_home(error=f"Invalid context JSON: {exc}")
