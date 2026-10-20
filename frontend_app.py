@@ -71,6 +71,18 @@ SERVICE_NAMES = [
     "recommendation_plan",
 ]
 
+SERVICE_DESCRIPTIONS = {
+    "resume_analysis": "Extracts your skills, experience, and projects from a resume and returns a structured profile.",
+    "job_discovery": "Finds job listings for a role and location, filters for recent postings, and returns source links.",
+    "company_research": "Builds a company brief for a target role and location, with hiring signals and evidence to guide your application.",
+    "application_tracker": "Saves applications and lets you review or update their status and follow-up dates.",
+    "resume_tailoring": "Adapts your resume wording to a target job while keeping the experience grounded in your source resume.",
+    "ats_optimization": "Checks your resume against a target job and suggests relevant keyword and formatting improvements.",
+    "interview_prep": "Creates role-specific interview questions and preparation guidance based on your resume and target job.",
+    "career_coach": "Highlights skill gaps and turns them into a practical learning and portfolio plan.",
+    "recommendation_plan": "Runs a JSON-selected workflow, such as resume analysis, job discovery, or company research, and saves the results to its status page.",
+}
+
 EMAIL_PATTERN = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
 
@@ -352,7 +364,7 @@ def _render_home(message: str | None = None, error: str | None = None, result: d
     <div class="grid">
       <div class="card">
         <h2>Candidate Intake</h2>
-        <p>Upload a PDF resume and queue a recommendation request.</p>
+        <p>Upload your resume and choose a target role. The background worker extracts your profile, finds matching opportunities, and prepares recommendations.</p>
         <form action="/intake" method="post" enctype="multipart/form-data">
           <div class="field"><label>Email</label><input name="email" type="email" placeholder="name@example.com" required /></div>
           <div class="field"><label>Target role</label><select name="role" required>{''.join(f'<option value="{html.escape(role)}">{html.escape(role)}</option>' for role in ROLE_OPTIONS)}</select></div>
@@ -363,7 +375,7 @@ def _render_home(message: str | None = None, error: str | None = None, result: d
 
       <div class="card">
         <h2>Recommendation Plan</h2>
-        <p>Send a JSON workflow context to the service layer.</p>
+        <p>Run a targeted workflow from structured context. Choose an intent and provide the inputs it needs—for example, resume text plus role keywords and location for analysis and job discovery. Results are saved on the request status page.</p>
         <form action="/recommendations/run" method="post">
           <div class="field"><label>Context JSON</label><textarea name="context_json">{html.escape(json.dumps({
         "intent": "auto",
@@ -379,6 +391,7 @@ def _render_home(message: str | None = None, error: str | None = None, result: d
 
       <div class="card">
         <h2>Resume Service</h2>
+        <p>Extracts skills, work history, and projects into a structured profile you can use for matching and career tools.</p>
         <form action="/resume/analyze" method="post" enctype="multipart/form-data">
           <div class="field"><label>Resume PDF</label><input name="resume" type="file" accept="application/pdf" required /></div>
           <button class="button" type="submit">Analyze resume</button>
@@ -387,6 +400,7 @@ def _render_home(message: str | None = None, error: str | None = None, result: d
 
       <div class="card">
         <h2>Job Service</h2>
+        <p>Searches for current listings that match your role keywords and location, then shows job details and source links.</p>
         <form action="/jobs/discover" method="post">
           <div class="field"><label>Keywords</label><input name="keywords" placeholder="software engineer" required /></div>
           <div class="field"><label>Location</label><input name="location" placeholder="City, region, country, or remote" /><small>Only include roles whose listed location matches. Results must have a source posting or update date within the last 30 days.</small></div>
@@ -396,6 +410,7 @@ def _render_home(message: str | None = None, error: str | None = None, result: d
 
       <div class="card">
         <h2 id="company-service">Company Service</h2>
+        <p>Researches a company for a specific role and location, then summarizes hiring signals and useful application context.</p>
         <form action="/company/research" method="post">
           <div class="field"><label>Company</label><input name="company" placeholder="Google" required /></div>
           <div class="field"><label>Target role</label><input name="target_role" placeholder="Software Engineer" required /></div>
@@ -422,7 +437,10 @@ def healthz() -> dict[str, str]:
 
 @app.get("/api/services")
 def services() -> dict[str, object]:
-    return {"services": SERVICE_NAMES}
+    return {
+        "services": SERVICE_NAMES,
+        "descriptions": SERVICE_DESCRIPTIONS,
+    }
 
 
 @app.post("/api/intake")
