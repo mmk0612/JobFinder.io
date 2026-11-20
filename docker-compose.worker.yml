@@ -1,12 +1,41 @@
 services:
+  kafka:
+    image: apache/kafka:latest
+    container_name: jobfinder-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://musashi.guneet.xyz:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
   jobfinder-worker:
     build:
       context: .
       dockerfile: Dockerfile.worker
+    container_name: jobfinder-worker
+    depends_on:
+      - kafka
     env_file:
       - .env.worker
     environment:
       PYTHONUNBUFFERED: "1"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
+      KAFKA_SECURITY_PROTOCOL: "PLAINTEXT"
+      KAFKA_SASL_MECHANISM: ""
+      KAFKA_SASL_USERNAME: ""
+      KAFKA_SASL_PASSWORD: ""
     init: true
     restart: unless-stopped
     stop_grace_period: 30s
